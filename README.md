@@ -2,7 +2,7 @@
 
 面向学习教程的 B站视频总结工作台：解析 B站链接、获取公开字幕、调用 AI 校正和总结、生成短标题、保存 Markdown，并可同步到飞书云文档。
 
-这是 BYOK（Bring Your Own Key）工具：仓库不内置 API Key，所有云服务都通过环境变量或 `config.json` 配置。
+这是 BYOK（Bring Your Own Key）工具：仓库不内置 API Key。默认配置已经内置，通常只需要设置环境变量，比如 `DEEPSEEK_API_KEY`；只有要换模型、换接口地址、启用飞书或 ASR 时，才需要创建 `config.json`。
 
 ## 功能
 
@@ -30,7 +30,19 @@ npm install
 npm --prefix frontend install
 ```
 
-创建配置：
+最小配置只需要一个 Key。以 DeepSeek 为例：
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+```
+
+Windows PowerShell：
+
+```powershell
+$env:DEEPSEEK_API_KEY="sk-..."
+```
+
+`config.json` 不是必需的。只有要覆盖默认配置时才复制示例：
 
 ```bash
 cp config.example.json config.json
@@ -57,6 +69,13 @@ npm start
 ```
 
 ## 配置
+
+默认情况下，不创建 `config.json` 也能启动。项目会使用这些默认值：
+
+- AI：DeepSeek OpenAI-compatible
+- 模型：`deepseek-chat`
+- ASR：默认关闭
+- 飞书：默认关闭
 
 常用环境变量：
 

@@ -1,6 +1,24 @@
 # 配置说明
 
-项目默认读取 `config.json`，缺失字段会使用默认值。敏感信息建议只放环境变量。
+`config.json` 是可选的，不是必填项。
+
+项目缺失 `config.json` 时会使用默认配置。大多数用户只需要设置环境变量，比如 `DEEPSEEK_API_KEY`，就可以直接启动。
+
+默认配置：
+
+- AI Provider：DeepSeek OpenAI-compatible
+- Base URL：`https://api.deepseek.com`
+- Model：`deepseek-chat`
+- ASR：关闭
+- 飞书：关闭
+
+敏感信息建议只放环境变量，不要写进仓库。
+
+如果你想换模型、换接口地址、启用飞书或 ASR，再复制配置文件：
+
+```bash
+cp config.example.json config.json
+```
 
 如果你想把配置放到其他位置，可以设置：
 
