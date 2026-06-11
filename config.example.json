@@ -1,0 +1,42 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8791
+  },
+  "bilibili": {
+    "cookie_env": "BILIBILI_COOKIE"
+  },
+  "ai": {
+    "provider": "openai_compatible",
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "model": "deepseek-chat",
+    "dify_app_type": "chat",
+    "dify_user": "bilibili-study-notes"
+  },
+  "asr": {
+    "provider": "none",
+    "openai_base_url": "https://api.openai.com/v1",
+    "openai_api_key_env": "OPENAI_API_KEY",
+    "model": "whisper-1",
+    "work_dir": "notes/asr"
+  },
+  "feishu": {
+    "enabled": false,
+    "enabled_env": "FEISHU_ENABLED",
+    "app_id_env": "FEISHU_APP_ID",
+    "app_secret_env": "FEISHU_APP_SECRET",
+    "folder_token_env": "FEISHU_FOLDER_TOKEN",
+    "document_id_env": "FEISHU_DOCUMENT_ID"
+  },
+  "tts": {
+    "provider": "gpt_sovits",
+    "app_id_env": "VOLCENGINE_TTS_APP_ID",
+    "access_token_env": "VOLCENGINE_TTS_ACCESS_TOKEN",
+    "cluster": "volcano_tts",
+    "endpoint": "https://openspeech.bytedance.com/api/v1/tts",
+    "voice_type_env": "VOLCENGINE_TTS_VOICE_TYPE",
+    "gpt_sovits_base_url": "http://127.0.0.1:9880",
+    "gpt_sovits_prompt_lang": "zh"
+  }
+}

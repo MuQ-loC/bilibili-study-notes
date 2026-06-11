@@ -1,0 +1,220 @@
+:root {
+  color-scheme: light;
+  background: #f4f6f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f4f6f9;
+}
+
+.appShell {
+  min-height: 100vh;
+  background: #f4f6f9;
+}
+
+.appHeader {
+  height: 64px;
+  padding: 0 20px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.appTitle {
+  margin: 0 0 2px !important;
+  line-height: 1.1 !important;
+}
+
+.appContent {
+  padding: 16px;
+}
+
+.full {
+  width: 100%;
+}
+
+.videoMeta {
+  margin-top: 12px;
+}
+
+.playerFrame {
+  width: 100%;
+  height: 430px;
+  border: 0;
+  display: block;
+  background: #111827;
+}
+
+.emptyPane {
+  height: 430px;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.toolbar {
+  margin-bottom: 10px;
+}
+
+.compactAlert {
+  margin-bottom: 10px;
+}
+
+.workText {
+  min-height: 320px !important;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  line-height: 1.55;
+}
+
+.noteText {
+  min-height: 460px !important;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  line-height: 1.55;
+}
+
+.instructionText {
+  min-height: 160px !important;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  line-height: 1.55;
+}
+
+.stackGap {
+  margin-bottom: 10px;
+}
+
+.topGap {
+  margin-top: 12px;
+}
+
+.subbar {
+  min-height: 30px;
+  padding-top: 8px;
+}
+
+.capturePreview {
+  width: 100%;
+  height: 220px;
+  object-fit: contain;
+  background: #111827;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.miniList,
+.logList {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.miniList div,
+.logList div {
+  padding: 6px 0;
+  border-bottom: 1px solid #eef2f7;
+  word-break: break-all;
+}
+
+.logCard {
+  margin-top: 16px;
+}
+
+.checkGroup {
+  margin: 2px 0 16px;
+}
+
+.runButton {
+  margin-top: 4px;
+}
+
+.batchLog {
+  height: 520px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+}
+
+.previewText {
+  min-height: 98px !important;
+  line-height: 1.55;
+}
+
+.voiceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 12px;
+}
+
+.voiceCard {
+  min-height: 210px;
+}
+
+.activeVoice {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.voiceType {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-all;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+}
+
+.voiceTags {
+  min-height: 34px;
+  margin: 12px 0 10px;
+}
+
+.audioPlayer {
+  width: 100%;
+}
+
+.ant-card {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+@media (max-width: 768px) {
+  .appHeader {
+    height: auto;
+    padding: 12px 14px;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .appContent {
+    padding: 10px;
+  }
+
+  .playerFrame,
+  .emptyPane {
+    height: 260px;
+  }
+
+  .noteText,
+  .batchLog {
+    min-height: 360px !important;
+    height: 360px;
+  }
+}

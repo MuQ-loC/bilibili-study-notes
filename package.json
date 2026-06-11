@@ -1,0 +1,24 @@
+{
+  "name": "bilibili-study-notes",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "dev:api": "tsx watch src/server/index.ts",
+    "dev:web": "npm --prefix frontend run dev",
+    "build:web": "npm --prefix frontend run build",
+    "build:api": "tsc -p tsconfig.server.json",
+    "build": "npm run build:api && npm run build:web",
+    "start": "node dist/server/index.js",
+    "check": "tsc -p tsconfig.server.json --noEmit && npm --prefix frontend run build"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
