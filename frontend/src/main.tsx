@@ -1196,6 +1196,56 @@ function App() {
     </Row>
   );
 
+  const dashboard = (
+    <div className="dashboard">
+      <Card className="heroPanel">
+        <Flex justify="space-between" align="flex-start" gap={18} wrap="wrap">
+          <div className="heroCopy">
+            <Tag color="blue">本地优先 / BYOK / 可同步飞书</Tag>
+            <Title level={2} className="heroTitle">B站教程学习笔记工作台</Title>
+            <Text className="heroDesc">
+              从 B站链接到字幕校正、学习笔记、合集并发和配音试听，所有高频操作集中在一个页面里。
+            </Text>
+          </div>
+          <Space size={10} wrap>
+            <Button type="primary" icon={<PlayCircleOutlined />} onClick={analyze} disabled={!url.trim() || busy}>
+              解析当前链接
+            </Button>
+            <Button icon={<FolderOpenOutlined />} onClick={startBatchSummary} disabled={batchRunning || !(batchUrl || url).trim()}>
+              跑合集
+            </Button>
+            <Button icon={<AudioOutlined />} onClick={() => previewVoice()} loading={ttsLoading}>
+              试听配音
+            </Button>
+          </Space>
+        </Flex>
+      </Card>
+
+      <Row gutter={[12, 12]} className="metricRow">
+        <Col xs={12} md={6}>
+          <Card size="small" className="metricCard">
+            <Statistic title="当前视频" value={video ? 1 : 0} suffix="个" />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card size="small" className="metricCard">
+            <Statistic title="字幕字数" value={transcriptWordCount} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card size="small" className="metricCard">
+            <Statistic title="笔记字数" value={summaryWordCount} />
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card size="small" className="metricCard">
+            <Statistic title="音色数量" value={ttsVoices.length} />
+          </Card>
+        </Col>
+      </Row>
+    </div>
+  );
+
   return (
     <ConfigProvider
       theme={{
@@ -1209,19 +1259,27 @@ function App() {
       <Layout className="appShell">
         <Header className="appHeader">
           <div>
-            <Title level={4} className="appTitle">B站教程学习笔记工作台</Title>
-            <Text type="secondary">127.0.0.1:8791</Text>
+            <Title level={4} className="appTitle">B站视频总结工具</Title>
+            <Text type="secondary">API 127.0.0.1:8791 · Web 127.0.0.1:8792</Text>
           </div>
-          <Tag color="blue">{APP_VERSION}</Tag>
+          <Space>
+            <Tag color={busy || streaming || batchRunning ? 'processing' : 'success'}>
+              {busy || streaming || batchRunning ? '运行中' : '就绪'}
+            </Tag>
+            <Tag color="blue">{APP_VERSION}</Tag>
+          </Space>
         </Header>
         <Content className="appContent">
+          {dashboard}
           <Tabs
             defaultActiveKey="single"
             size="large"
+            type="card"
+            className="workspaceTabs"
             items={[
-              { key: 'single', label: '单视频工作台', children: singleVideoPane },
-              { key: 'batch', label: '合集/专辑批量', children: batchPane },
-              { key: 'voice', label: '配音音色', children: voicePane }
+              { key: 'single', label: <span><VideoCameraOutlined /> 单视频工作台</span>, children: singleVideoPane },
+              { key: 'batch', label: <span><FolderOpenOutlined /> 合集/专辑批量</span>, children: batchPane },
+              { key: 'voice', label: <span><AudioOutlined /> 配音音色</span>, children: voicePane }
             ]}
           />
         </Content>
