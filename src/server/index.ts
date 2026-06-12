@@ -146,6 +146,7 @@ app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
   sse(res, async (send) => {
     const urls = await expandVideoUrls(url, limit);
     send('log', { message: `[album] extracted ${urls.length} video(s), workers=${workers}` });
+    urls.forEach((item, index) => send('log', { message: `[album] #${index + 1} ${item}` }));
     const queue = urls.map((item, index) => ({ url: item, index: index + 1 }));
     await Promise.all(Array.from({ length: workers }, async () => {
       while (queue.length) {
@@ -210,7 +211,10 @@ async function runBatchOne(
 
 async function expandVideoUrls(url: string, limit: number): Promise<string[]> {
   const fromYtdlp = await ytdlpFlat(url).catch(() => []);
-  const urls = fromYtdlp.length ? fromYtdlp : [url].filter((item) => extractBvid(item));
+  const fromPages = extractBvid(url) ? await bilibili.listVideoPages(url).catch(() => []) : [];
+  const ytdlpUrls = uniqueVideoUrls(fromYtdlp);
+  const pageUrls = uniqueVideoUrls(fromPages);
+  const urls = ytdlpUrls.length > 1 ? ytdlpUrls : pageUrls.length > 1 ? pageUrls : uniqueVideoUrls([url].filter((item) => extractBvid(item)));
   if (!urls.length) throw new Error('没有解析到 B站视频链接');
   return limit > 0 ? urls.slice(0, limit) : urls;
 }
@@ -221,7 +225,37 @@ async function ytdlpFlat(url: string): Promise<string[]> {
   return (data.entries || [])
     .map((item) => item.webpage_url || item.url || item.id || '')
     .filter(Boolean)
-    .map((item) => item.startsWith('BV') ? `https://www.bilibili.com/video/${item}` : item);
+    .map(normalizeBilibiliUrl)
+    .filter(Boolean);
+}
+
+function uniqueVideoUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of urls.map(normalizeBilibiliUrl).filter(Boolean)) {
+    const key = url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(url);
+  }
+  return out;
+}
+
+function normalizeBilibiliUrl(raw: string): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^BV[0-9A-Za-z]{8,}/i.test(value)) return `https://www.bilibili.com/video/${value}`;
+  const bvid = extractBvid(value);
+  if (!bvid) return value;
+  const page = (() => {
+    try {
+      const parsed = new URL(value.startsWith('http') ? value : `https://www.bilibili.com/video/${value}`);
+      return parsed.searchParams.get('p') || parsed.searchParams.get('page') || '';
+    } catch {
+      return value.match(/[?&#](?:p|page)=(\d+)/i)?.[1] || '';
+    }
+  })();
+  return `https://www.bilibili.com/video/${bvid}${Number(page) > 1 ? `?p=${Number(page)}` : ''}`;
 }
 
 function runCapture(command: string, args: string[]): Promise<string> {

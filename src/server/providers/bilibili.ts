@@ -11,7 +11,7 @@ type ViewResponse = {
     pic: string;
     duration: number;
     owner: { mid: number; name: string };
-    pages?: Array<{ cid: number; page: number; part: string }>;
+    pages?: Array<{ cid: number; page: number; part: string; duration?: number }>;
   };
 };
 
@@ -67,19 +67,25 @@ export class BilibiliClient {
     }
     if (!bvid) throw new Error('没有识别到 BVID');
 
-    const canonicalUrl = `https://www.bilibili.com/video/${bvid}`;
-    const view = await this.fetchJson<ViewResponse>(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, canonicalUrl);
+    const requestedPage = extractPageNumber(rawUrl);
+    const baseUrl = `https://www.bilibili.com/video/${bvid}`;
+    const view = await this.fetchJson<ViewResponse>(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, baseUrl);
     if (view.code !== 0) throw new Error(`B站 view 接口失败: ${view.code} ${view.message}`);
-    const cid = view.data.cid || view.data.pages?.[0]?.cid || 0;
+    const pages = view.data.pages || [];
+    const page = requestedPage > 0 ? pages.find((item) => item.page === requestedPage) : pages[0];
+    const cid = page?.cid || view.data.cid || pages[0]?.cid || 0;
+    const pageNo = page?.page || (requestedPage > 0 ? requestedPage : 1);
+    const canonicalUrl = `${baseUrl}${pageNo > 1 ? `?p=${pageNo}` : ''}`;
+    const pagePart = page?.part?.trim();
     const video: Video = {
       id: crypto.randomUUID(),
       url: canonicalUrl,
       bvid,
       cid,
-      title: view.data.title,
+      title: pagePart && pages.length > 1 ? `${view.data.title} - P${pageNo} ${pagePart}` : view.data.title,
       owner: view.data.owner?.name || '',
       cover_url: view.data.pic,
-      duration: view.data.duration
+      duration: page?.duration || view.data.duration
     };
 
     const transcript: Transcript = { source: 'none', language: 'zh-CN', content: '' };
@@ -90,6 +96,23 @@ export class BilibiliClient {
       if (conclusion) return { video, transcript: { ...transcript, source: 'bilibili_ai', content: conclusion } };
     }
     return { video, transcript };
+  }
+
+  async listVideoPages(rawUrl: string): Promise<string[]> {
+    let bvid = extractBvid(rawUrl);
+    if (!bvid && rawUrl) {
+      const resolved = await this.resolveRedirect(rawUrl).catch(() => '');
+      bvid = extractBvid(resolved);
+    }
+    if (!bvid) return [];
+    const baseUrl = `https://www.bilibili.com/video/${bvid}`;
+    const view = await this.fetchJson<ViewResponse>(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, baseUrl);
+    if (view.code !== 0) return [];
+    const pages = view.data.pages || [];
+    if (pages.length <= 1) return [baseUrl];
+    return pages
+      .sort((a, b) => a.page - b.page)
+      .map((page) => `${baseUrl}${page.page > 1 ? `?p=${page.page}` : ''}`);
   }
 
   private async resolveRedirect(rawUrl: string): Promise<string> {
@@ -162,6 +185,19 @@ export function extractBvid(value: string): string {
   return value.match(/(BV[0-9A-Za-z]{8,})/i)?.[1] || '';
 }
 
+export function extractPageNumber(value: string): number {
+  if (!value) return 0;
+  try {
+    const parsed = new URL(value);
+    const raw = parsed.searchParams.get('p') || parsed.searchParams.get('page') || '';
+    const page = Number(raw);
+    return Number.isFinite(page) && page > 0 ? Math.floor(page) : 0;
+  } catch {
+    const match = value.match(/[?&#](?:p|page)=(\d+)/i);
+    return match ? Number(match[1]) : 0;
+  }
+}
+
 function formatSubtitle(items: Array<{ from: number; to: number; content: string }>): string {
   return items
     .map((item) => `[${item.from.toFixed(1)}-${item.to.toFixed(1)}] ${item.content.trim()}`)
@@ -195,4 +231,3 @@ function fileKey(rawUrl: string): string {
   const pathname = new URL(rawUrl).pathname;
   return pathname.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
 }
-
