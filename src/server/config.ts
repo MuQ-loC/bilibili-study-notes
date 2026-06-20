@@ -45,7 +45,8 @@ const defaultConfig: AppConfig = {
 
 export function loadConfig(file = 'config.json'): AppConfig {
   const configPath = path.resolve(file);
-  const raw = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const rawText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '') : '';
+  const raw = rawText ? JSON.parse(rawText) : {};
   const cfg = merge(defaultConfig, raw) as AppConfig;
 
   if (process.env.HOST) cfg.server.host = process.env.HOST;
