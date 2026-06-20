@@ -18,22 +18,26 @@ body {
 }
 
 .appHeader {
-  height: 64px;
-  padding: 0 20px;
+  min-height: 76px;
+  height: auto;
+  padding: 12px 20px;
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  overflow: visible;
 }
 
 .appTitle {
-  margin: 0 0 2px !important;
-  line-height: 1.1 !important;
+  margin: 0 0 6px !important;
+  line-height: 1.25 !important;
 }
 
 .appContent {
-  padding: 18px;
+  padding: 20px 18px 18px;
   max-width: 1760px;
   width: 100%;
   margin: 0 auto;
