@@ -50,6 +50,9 @@ export function loadConfig(file = 'config.json'): AppConfig {
 
   cfg.bilibili.cookie ||= env(cfg.bilibili.cookie_env);
   cfg.ai.api_key ||= cfg.ai.api_key_env ? env(cfg.ai.api_key_env) : '';
+  if (env('ASR_PROVIDER')) cfg.asr.provider = env('ASR_PROVIDER') as AppConfig['asr']['provider'];
+  if (env('ASR_MODEL')) cfg.asr.model = env('ASR_MODEL');
+  if (env('OPENAI_BASE_URL')) cfg.asr.openai_base_url = env('OPENAI_BASE_URL');
   cfg.asr.openai_api_key ||= cfg.asr.openai_api_key_env ? env(cfg.asr.openai_api_key_env) : '';
 
   if (cfg.feishu.enabled_env && env(cfg.feishu.enabled_env)) {

@@ -16,17 +16,27 @@ export class ASRProvider {
     if (!this.cfg.openai_api_key) throw new Error('未配置 OPENAI_API_KEY');
     await fs.mkdir(this.cfg.work_dir, { recursive: true });
     onProgress?.('正在用 yt-dlp 提取音频...');
-    const audioPath = await downloadAudio(video.url, this.cfg.work_dir, video.bvid);
+    const audioPath = await downloadAudio(video.url, this.cfg.work_dir, `${video.bvid}-${video.cid || video.id}`);
     onProgress?.('正在上传到 OpenAI Transcription API...');
     const text = await transcribeOpenAI(audioPath, this.cfg);
     return { source: `openai_asr/${this.cfg.model}`, language: 'zh-CN', content: text };
   }
 }
 
-async function downloadAudio(url: string, workDir: string, bvid: string): Promise<string> {
-  const out = path.join(workDir, `${bvid}.%(ext)s`);
-  await run('yt-dlp', ['-x', '--audio-format', 'mp3', '-o', out, url]);
-  return path.join(workDir, `${bvid}.mp3`);
+async function downloadAudio(url: string, workDir: string, id: string): Promise<string> {
+  const safeID = id.replace(/[^0-9A-Za-z_-]/g, '_');
+  const out = path.join(workDir, `${safeID}.%(ext)s`);
+  await run('yt-dlp', [
+    '-x',
+    '--audio-format',
+    'mp3',
+    '--postprocessor-args',
+    'ffmpeg:-ac 1 -ar 16000 -b:a 32k',
+    '-o',
+    out,
+    url
+  ]);
+  return path.join(workDir, `${safeID}.mp3`);
 }
 
 async function transcribeOpenAI(filePath: string, cfg: AppConfig['asr']): Promise<string> {
@@ -60,4 +70,3 @@ function run(command: string, args: string[]): Promise<void> {
     });
   });
 }
-

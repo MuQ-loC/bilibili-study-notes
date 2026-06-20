@@ -32,6 +32,9 @@ CONFIG_PATH=./my-config.json npm start
 BILIBILI_COOKIE
 DEEPSEEK_API_KEY
 OPENAI_API_KEY
+ASR_PROVIDER
+ASR_MODEL
+OPENAI_BASE_URL
 DIFY_API_KEY
 FEISHU_ENABLED
 FEISHU_APP_ID
@@ -61,3 +64,12 @@ FEISHU_DOCUMENT_ID
 - `openai`
 
 `openai` ASR 需要额外安装 `yt-dlp`，后端会先提取音频再上传转写。
+
+不想创建 `config.json` 时，可以直接用环境变量启用 ASR：
+
+```powershell
+$env:ASR_PROVIDER="openai"
+$env:OPENAI_API_KEY="sk-..."
+```
+
+长视频会被提取为 16k 单声道低码率 mp3，降低 OpenAI Whisper 文件大小超限的概率。
