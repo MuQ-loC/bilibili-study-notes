@@ -51,7 +51,6 @@ export class FeishuProvider {
   private async appendBlocks(token: string, documentId: string, blocks: RenderItem[]): Promise<void> {
     const items = blocks.length ? blocks : [textBlock('暂无内容')];
     let pending: FeishuBlock[] = [];
-
     const flushPending = async () => {
       if (!pending.length) return;
       for (let i = 0; i < pending.length; i += 40) {
@@ -64,7 +63,6 @@ export class FeishuProvider {
       }
       pending = [];
     };
-
     for (const item of items) {
       if (isTablePlan(item)) {
         await flushPending();
@@ -145,7 +143,6 @@ function markdownToBlocks(markdown: string): RenderItem[] {
   let inCode = false;
   let codeLines: string[] = [];
   const lines = markdown.split('\n');
-
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].trimEnd();
     const trimmed = line.trim();
@@ -164,14 +161,12 @@ function markdownToBlocks(markdown: string): RenderItem[] {
       continue;
     }
     if (!trimmed || trimmed === '---') continue;
-
     const table = readMarkdownTable(lines, i);
     if (table) {
       blocks.push({ kind: 'table', rows: table.rows });
       i = table.endIndex;
       continue;
     }
-
     blocks.push(markdownLineToBlock(trimmed));
   }
   if (inCode && codeLines.join('\n').trim()) blocks.push(codeBlock(codeLines.join('\n')));
@@ -228,9 +223,7 @@ function markdownLineToBlock(line: string): FeishuBlock {
 }
 
 function normalizeTableRows(rows: string[][]): string[][] {
-  return rows
-    .map((row) => row.map((cell) => cell.trim()))
-    .filter((row) => row.some(Boolean));
+  return rows.map((row) => row.map((cell) => cell.trim())).filter((row) => row.some(Boolean));
 }
 
 function isTablePlan(value: RenderItem): value is TablePlan {
@@ -267,20 +260,35 @@ function richTextBlock(blockType: number, key: string, text: string): FeishuBloc
 }
 
 async function postJson<T>(url: string, token: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify(body)
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`飞书 HTTP ${res.status}: ${text}`);
-  return JSON.parse(text) as T;
+  const maxAttempts = 8;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (url.includes('/docx/')) await sleep(250);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(body)
+    });
+    const text = await res.text();
+    if (res.ok) return JSON.parse(text) as T;
+    if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts) {
+      const retryAfter = Number(res.headers.get('retry-after') || 0);
+      const waitMs = retryAfter > 0 ? retryAfter * 1000 : Math.min(30000, 1000 * 2 ** (attempt - 1));
+      await sleep(waitMs);
+      continue;
+    }
+    throw new Error(`飞书 HTTP ${res.status}: ${text}`);
+  }
+  throw new Error('飞书 HTTP 请求重试耗尽');
 }
 
 function isResourceDeletedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('1770003') || /resource deleted/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
