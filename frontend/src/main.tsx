@@ -134,6 +134,30 @@ type AppDraft = {
   feishuTarget?: string;
 };
 
+type Course = {
+  id: string;
+  title: string;
+  source_url: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type CourseLesson = {
+  id: string;
+  course_id: string;
+  index: number;
+  url: string;
+  status: 'queued' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
+  error: string;
+  video?: Video;
+  transcript?: Transcript;
+  corrected_transcript?: Transcript;
+  summary?: Summary;
+  note?: Note;
+  created_at: string;
+  updated_at: string;
+};
+
 const APP_VERSION = '2026-06-10-antd-batch-1';
 const DRAFT_KEY = 'bili_summary_workspace_draft_v1';
 const DEFAULT_INSTRUCTION = '按学习教程笔记整理，提取操作步骤、命令、关键概念、易错点和复习清单。';
@@ -243,6 +267,14 @@ function App() {
   const [ttsPreview, setTtsPreview] = useState<TTSPreview | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsMessage, setTtsMessage] = useState('正在加载音色列表...');
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [selectedCourseID, setSelectedCourseID] = useState('');
+  const [courseLessons, setCourseLessons] = useState<CourseLesson[]>([]);
+  const [activeLessonID, setActiveLessonID] = useState('');
+  const [courseStatus, setCourseStatus] = useState('课程历史加载后，可以接着编辑、总结和保存笔记。');
+  const [lessonTranscriptDraft, setLessonTranscriptDraft] = useState('');
+  const [lessonSummaryDraft, setLessonSummaryDraft] = useState('');
+  const [lessonBusy, setLessonBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const currentPlayer = useMemo(() => playerUrl(video), [video]);
@@ -261,6 +293,10 @@ function App() {
       }),
     [ttsVoices, voiceGender, voiceStyle]
   );
+  const activeLesson = useMemo(
+    () => courseLessons.find((item) => item.id === activeLessonID) || null,
+    [courseLessons, activeLessonID]
+  );
 
   useEffect(() => {
     api<{ status: TTSStatus; voices: TTSVoice[] }>('/api/tts/voices')
@@ -277,6 +313,10 @@ function App() {
       .catch((err) => {
         setTtsMessage(`音色列表加载失败：${(err as Error).message}`);
       });
+  }, []);
+
+  useEffect(() => {
+    loadCourses();
   }, []);
 
   useEffect(() => {
@@ -310,6 +350,101 @@ function App() {
 
   function addBatchLog(message: string) {
     setBatchLogs((items) => [...items, `${new Date().toLocaleTimeString()} ${message}`].slice(-160));
+  }
+
+  async function loadCourses() {
+    try {
+      const res = await api<{ courses: Course[] }>('/api/courses');
+      setCourses(res.courses);
+      if (!selectedCourseID && res.courses[0]) {
+        await loadCourse(res.courses[0].id);
+      }
+    } catch (err) {
+      setCourseStatus(`课程历史加载失败：${(err as Error).message}`);
+    }
+  }
+
+  async function loadCourse(courseID: string) {
+    const res = await api<{ course: Course; lessons: CourseLesson[] }>(`/api/courses/${courseID}`);
+    setSelectedCourseID(res.course.id);
+    setCourseLessons(res.lessons);
+    const first = res.lessons[0];
+    setActiveLessonID(first?.id || '');
+    loadLessonDraft(first || null);
+    setCourseStatus(`已加载：${res.course.title} / ${res.lessons.length} 课时`);
+  }
+
+  function loadLessonDraft(lesson: CourseLesson | null) {
+    if (!lesson) {
+      setLessonTranscriptDraft('');
+      setLessonSummaryDraft('');
+      return;
+    }
+    setLessonTranscriptDraft(lesson.corrected_transcript?.content || lesson.transcript?.content || '');
+    setLessonSummaryDraft(lesson.summary?.markdown || '');
+  }
+
+  async function saveLessonDraft() {
+    if (!activeLesson) return;
+    setLessonBusy(true);
+    try {
+      const transcriptPayload = {
+        source: activeLesson.corrected_transcript?.source || 'manual_edit',
+        language: 'zh-CN',
+        content: lessonTranscriptDraft
+      };
+      const summaryPayload = activeLesson.summary
+        ? { ...activeLesson.summary, markdown: lessonSummaryDraft }
+        : lessonSummaryDraft.trim()
+          ? { id: '', video_id: activeLesson.video?.id || '', model: 'manual', markdown: lessonSummaryDraft }
+          : undefined;
+      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}`, {
+        corrected_transcript: transcriptPayload,
+        summary: summaryPayload
+      });
+      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setCourseStatus('课时内容已保存');
+    } catch (err) {
+      setCourseStatus(`保存失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
+  async function summarizeActiveLesson() {
+    if (!activeLesson) return;
+    setLessonBusy(true);
+    setCourseStatus('正在从当前课时文本继续总结...');
+    try {
+      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/summarize`, {
+        transcript: lessonTranscriptDraft,
+        instruction
+      });
+      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setLessonSummaryDraft(updated.summary?.markdown || '');
+      setCourseStatus('课时总结完成');
+    } catch (err) {
+      setCourseStatus(`总结失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
+  async function saveActiveLessonNote() {
+    if (!activeLesson) return;
+    setLessonBusy(true);
+    try {
+      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/note`, {
+        title: activeLesson.video?.title || `课时${activeLesson.index}`,
+        markdown: lessonSummaryDraft
+      });
+      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setCourseStatus(`笔记已保存：${updated.note?.id || ''}`);
+    } catch (err) {
+      setCourseStatus(`保存笔记失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
   }
 
   async function previewVoice(voiceType = selectedVoiceType) {
@@ -1196,6 +1331,116 @@ function App() {
     </Row>
   );
 
+  const coursePane = (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} xl={8}>
+        <Space direction="vertical" size={16} className="full">
+          <Card
+            title="课程历史"
+            extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadCourses}>刷新</Button>}
+          >
+            <Select
+              className="full"
+              placeholder="选择课程"
+              value={selectedCourseID || undefined}
+              onChange={loadCourse}
+              options={courses.map((course) => ({
+                value: course.id,
+                label: course.title
+              }))}
+            />
+            <Alert className="compactAlert topGap" type={courseStatus.startsWith('失败') || courseStatus.includes('失败') ? 'error' : 'info'} showIcon message={courseStatus} />
+          </Card>
+
+          <Card title="课时列表" extra={<Tag color="blue">{courseLessons.length}</Tag>}>
+            <div className="lessonList">
+              {courseLessons.length === 0 ? (
+                <Empty description="暂无课程记录" />
+              ) : (
+                courseLessons.map((lesson) => (
+                  <button
+                    key={lesson.id}
+                    type="button"
+                    className={lesson.id === activeLessonID ? 'lessonItem activeLessonItem' : 'lessonItem'}
+                    onClick={() => {
+                      setActiveLessonID(lesson.id);
+                      loadLessonDraft(lesson);
+                    }}
+                  >
+                    <span className="lessonTitle">
+                      {String(lesson.index).padStart(2, '0')} {lesson.video?.title || lesson.url}
+                    </span>
+                    <span className="lessonMeta">
+                      <Tag color={lesson.status === 'done' ? 'green' : lesson.status === 'error' ? 'red' : 'processing'}>{lesson.status}</Tag>
+                      {lesson.note ? <Tag color="purple">已存笔记</Tag> : null}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </Card>
+        </Space>
+      </Col>
+
+      <Col xs={24} xl={16}>
+        {activeLesson ? (
+          <Space direction="vertical" size={16} className="full">
+            <Card
+              title={activeLesson.video?.title || `课时 ${activeLesson.index}`}
+              extra={
+                <Space wrap>
+                  <Button icon={<SaveOutlined />} loading={lessonBusy} onClick={saveLessonDraft}>
+                    保存修改
+                  </Button>
+                  <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={summarizeActiveLesson}>
+                    继续总结
+                  </Button>
+                  <Button icon={<FileTextOutlined />} loading={lessonBusy} onClick={saveActiveLessonNote}>
+                    保存笔记
+                  </Button>
+                </Space>
+              }
+            >
+              <Descriptions size="small" bordered column={1}>
+                <Descriptions.Item label="URL">{activeLesson.url}</Descriptions.Item>
+                <Descriptions.Item label="状态">{activeLesson.status}</Descriptions.Item>
+                <Descriptions.Item label="错误">{activeLesson.error || '-'}</Descriptions.Item>
+                <Descriptions.Item label="更新时间">{activeLesson.updated_at}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            <Row gutter={[16, 16]}>
+              <Col xs={24} xl={12}>
+                <Card title="字幕 / 校正文稿">
+                  <TextArea
+                    className="courseText"
+                    value={lessonTranscriptDraft}
+                    onChange={(event) => setLessonTranscriptDraft(event.target.value)}
+                    placeholder="这里会保留原始字幕、ASR 转写或你手动修正后的文稿"
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} xl={12}>
+                <Card title="总结 / 笔记">
+                  <TextArea
+                    className="courseText"
+                    value={lessonSummaryDraft}
+                    onChange={(event) => setLessonSummaryDraft(event.target.value)}
+                    placeholder="这里会保留 AI 总结，你可以继续编辑后保存成笔记"
+                  />
+                </Card>
+              </Col>
+            </Row>
+          </Space>
+        ) : (
+          <Card>
+            <Empty description="请选择一个课程课时" />
+          </Card>
+        )}
+      </Col>
+    </Row>
+  );
+
   const dashboard = (
     <div className="dashboard">
       <Card className="heroPanel">
@@ -1279,6 +1524,7 @@ function App() {
             items={[
               { key: 'single', label: <span><VideoCameraOutlined /> 单视频工作台</span>, children: singleVideoPane },
               { key: 'batch', label: <span><FolderOpenOutlined /> 合集/专辑批量</span>, children: batchPane },
+              { key: 'courses', label: <span><FileTextOutlined /> 课程管理</span>, children: coursePane },
               { key: 'voice', label: <span><AudioOutlined /> 配音音色</span>, children: voicePane }
             ]}
           />

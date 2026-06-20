@@ -240,6 +240,51 @@ body {
   width: 100%;
 }
 
+.lessonList {
+  display: grid;
+  gap: 8px;
+  max-height: 680px;
+  overflow: auto;
+}
+
+.lessonItem {
+  width: 100%;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 6px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activeLessonItem {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
+
+.lessonTitle {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.lessonMeta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.courseText {
+  min-height: 560px !important;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  line-height: 1.6;
+}
+
 .ant-card {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }

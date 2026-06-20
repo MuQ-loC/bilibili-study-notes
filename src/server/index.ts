@@ -133,6 +133,57 @@ app.post('/api/screenshots', asyncHandler(async (req, res) => {
   res.json({ id, video_id: video.id, note_id: req.body.note_id || '', timestamp: Number(req.body.timestamp || 0), file_path: filePath, description: req.body.description || 'manual screenshot' });
 }));
 
+app.get('/api/courses', asyncHandler(async (_req, res) => {
+  res.json({ courses: store.listCourses() });
+}));
+
+app.get('/api/courses/:id', asyncHandler(async (req, res) => {
+  const course = store.getCourse(String(req.params.id));
+  res.json({ course, lessons: store.listCourseLessons(course.id) });
+}));
+
+app.patch('/api/course-lessons/:id', asyncHandler(async (req, res) => {
+  const lesson = await store.updateCourseLesson(String(req.params.id), {
+    transcript: req.body.transcript,
+    corrected_transcript: req.body.corrected_transcript,
+    summary: req.body.summary,
+    status: req.body.status,
+    error: req.body.error
+  });
+  res.json(lesson);
+}));
+
+app.post('/api/course-lessons/:id', asyncHandler(async (req, res) => {
+  const lesson = await store.updateCourseLesson(String(req.params.id), {
+    transcript: req.body.transcript,
+    corrected_transcript: req.body.corrected_transcript,
+    summary: req.body.summary,
+    status: req.body.status,
+    error: req.body.error
+  });
+  res.json(lesson);
+}));
+
+app.post('/api/course-lessons/:id/summarize', asyncHandler(async (req, res) => {
+  const lesson = store.getCourseLesson(String(req.params.id));
+  if (!lesson.video) throw new Error('课时还没有解析视频信息');
+  const text = String(req.body.transcript || lesson.corrected_transcript?.content || lesson.transcript?.content || '');
+  if (!text.trim()) throw new Error('课时没有可总结的字幕/转写文本');
+  const updated = await store.updateCourseLesson(lesson.id, { status: 'summarizing', error: '' });
+  const summary = await ai.summarize(lesson.video, text, String(req.body.instruction || ''));
+  const saved = await store.saveSummary(lesson.video.id, { model: summary.model, markdown: summary.markdown });
+  res.json(await store.updateCourseLesson(updated.id, { summary: saved, status: 'done' }));
+}));
+
+app.post('/api/course-lessons/:id/note', asyncHandler(async (req, res) => {
+  const lesson = store.getCourseLesson(String(req.params.id));
+  if (!lesson.video) throw new Error('课时还没有解析视频信息');
+  const markdown = String(req.body.markdown || lesson.summary?.markdown || '');
+  if (!markdown.trim()) throw new Error('课时没有可保存的总结');
+  const note = await store.saveNote(lesson.video, String(req.body.title || lesson.video.title), markdown);
+  res.json(await store.attachLessonNote(lesson.id, note));
+}));
+
 app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
   const url = String(req.body.url || '').trim();
   if (!url) throw new Error('url is required');
@@ -147,12 +198,19 @@ app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
     const urls = await expandVideoUrls(url, limit);
     send('log', { message: `[album] extracted ${urls.length} video(s), workers=${workers}` });
     urls.forEach((item, index) => send('log', { message: `[album] #${index + 1} ${item}` }));
+    const course = await store.createCourse(url, `B站课程 ${new Date().toLocaleString('zh-CN', { hour12: false })}`);
+    for (const [index, item] of urls.entries()) {
+      await store.upsertCourseLesson({ course_id: course.id, index: index + 1, url: item, status: 'queued' });
+    }
+    send('log', { message: `[course] saved ${course.id}` });
     const queue = urls.map((item, index) => ({ url: item, index: index + 1 }));
     await Promise.all(Array.from({ length: workers }, async () => {
       while (queue.length) {
         const item = queue.shift();
         if (!item) return;
-        await runBatchOne(item.url, item.index, urls.length, { instruction, target, transcribeMissing, skipCorrect }, send).catch((err) => {
+        await runBatchOne(item.url, item.index, urls.length, { courseId: course.id, instruction, target, transcribeMissing, skipCorrect }, send).catch(async (err) => {
+          const lesson = store.listCourseLessons(course.id).find((entry) => entry.index === item.index);
+          if (lesson) await store.updateCourseLesson(lesson.id, { status: 'error', error: (err as Error).message });
           send('log', { message: `[error] #${item.index} ${(err as Error).message}` });
         });
       }
@@ -175,31 +233,42 @@ async function runBatchOne(
   url: string,
   index: number,
   total: number,
-  options: { instruction: string; target: string; transcribeMissing: boolean; skipCorrect: boolean },
+  options: { courseId?: string; instruction: string; target: string; transcribeMissing: boolean; skipCorrect: boolean },
   send: SendSSE
 ): Promise<void> {
   send('log', { message: `\n[${index}/${total}] ${url}` });
+  const lesson = options.courseId ? store.listCourseLessons(options.courseId).find((item) => item.index === index) : undefined;
+  if (lesson) await store.updateCourseLesson(lesson.id, { status: 'analyzing', error: '' });
   const { video, transcript } = await bilibili.analyze(url);
   await store.saveVideo(video);
+  if (lesson) await store.updateCourseLesson(lesson.id, { video, transcript, status: transcript.content.trim() ? 'correcting' : 'transcribing' });
   send('log', { message: `[video] ${video.title} / ${video.bvid}` });
   let text = transcript.content;
   if (text.trim()) await store.saveTranscript(video.id, transcript);
   if (!text.trim() && options.transcribeMissing) {
     send('log', { message: '[transcribe] no public transcript, running ASR provider...' });
+    if (lesson) await store.updateCourseLesson(lesson.id, { status: 'transcribing' });
     const asrText = await asr.transcribe(video, (message) => send('log', { message }));
     text = asrText.content;
     await store.saveTranscript(video.id, asrText);
+    if (lesson) await store.updateCourseLesson(lesson.id, { transcript: asrText, status: 'correcting' });
   }
   if (!text.trim()) throw new Error('没有字幕/转写文本，跳过');
   if (!options.skipCorrect) {
     send('log', { message: '[correct] correcting transcript...' });
+    if (lesson) await store.updateCourseLesson(lesson.id, { status: 'correcting' });
     text = await ai.correctTranscript(video, text);
+    const corrected = await store.saveTranscript(video.id, { source: 'ai_corrected', language: 'zh-CN', content: text });
+    if (lesson) await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing' });
   }
   send('log', { message: '[summary] generating...' });
+  if (lesson) await store.updateCourseLesson(lesson.id, { status: 'summarizing' });
   const summary = await ai.summarize(video, text, options.instruction);
   const title = await ai.shortTitle(video, summary.markdown, index);
   send('log', { message: `[title] ${title.title}` });
+  const savedSummary = await store.saveSummary(video.id, { model: summary.model, markdown: summary.markdown });
   const note = await store.saveNote(video, title.title, summary.markdown);
+  if (lesson) await store.updateCourseLesson(lesson.id, { summary: savedSummary, note, status: 'done', error: '' });
   send('log', { message: `[note] saved ${note.id}` });
   if (options.target.trim()) {
     const synced = await feishu.sync(note, options.target.includes('/folder/') ? { folder_url: options.target } : { document_url: options.target });

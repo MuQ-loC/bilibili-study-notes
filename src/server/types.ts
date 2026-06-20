@@ -34,6 +34,30 @@ export type Note = {
   updated_at: string;
 };
 
+export type Course = {
+  id: string;
+  title: string;
+  source_url: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CourseLesson = {
+  id: string;
+  course_id: string;
+  index: number;
+  url: string;
+  status: 'queued' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
+  error: string;
+  video?: Video;
+  transcript?: Transcript;
+  corrected_transcript?: Transcript;
+  summary?: Summary;
+  note?: Note;
+  created_at: string;
+  updated_at: string;
+};
+
 export type FeishuTarget = {
   document_id?: string;
   document_url?: string;
