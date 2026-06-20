@@ -77,48 +77,68 @@ export class FeishuProvider {
   private async appendTable(token: string, documentId: string, rows: string[][]): Promise<void> {
     const cleanRows = normalizeTableRows(rows);
     if (!cleanRows.length) return;
+    if (cleanRows.length > 40 || Math.max(...cleanRows.map((row) => row.length), 1) > 8) {
+      await this.appendTableFallback(token, documentId, cleanRows);
+      return;
+    }
     const columnSize = Math.max(...cleanRows.map((row) => row.length), 1);
     const normalizedRows = cleanRows.map((row) => [...row, ...Array(columnSize - row.length).fill('')]);
-    const tableRes = await postJson<{
-      code: number;
-      msg: string;
-      data?: { children?: Array<{ block_id?: string; children?: string[] }> };
-    }>(
-      `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
-      token,
-      {
-        children: [
-          {
-            block_type: 31,
-            table: {
-              property: {
-                row_size: normalizedRows.length,
-                column_size: columnSize
+    try {
+      const tableRes = await postJson<{
+        code: number;
+        msg: string;
+        data?: { children?: Array<{ block_id?: string; children?: string[]; table?: { cells?: string[] } }> };
+      }>(
+        `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+        token,
+        {
+          children: [
+            {
+              block_type: 31,
+              table: {
+                property: {
+                  row_size: normalizedRows.length,
+                  column_size: columnSize
+                }
               }
             }
-          }
-        ],
-        index: -1
+          ],
+          index: -1
+        }
+      );
+      if (tableRes.code !== 0) throw new Error(`飞书创建表格失败: ${tableRes.code} ${tableRes.msg}`);
+      const table = tableRes.data?.children?.[0];
+      const cellIds = table?.children || table?.table?.cells || [];
+      if (cellIds.length < normalizedRows.length * columnSize) {
+        throw new Error('飞书创建表格成功，但没有返回完整单元格 ID');
       }
+      for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+        for (let columnIndex = 0; columnIndex < columnSize; columnIndex += 1) {
+          const text = cleanInline(normalizedRows[rowIndex][columnIndex] || '');
+          if (!text) continue;
+          const cellId = cellIds[rowIndex * columnSize + columnIndex];
+          const res = await postJson<{ code: number; msg: string }>(
+            `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
+            token,
+            { children: [textBlock(text)], index: -1 }
+          );
+          if (res.code !== 0) throw new Error(`飞书写入表格单元格失败: ${res.code} ${res.msg}`);
+        }
+      }
+    } catch (error) {
+      if (!isInvalidParamError(error)) throw error;
+      await this.appendTableFallback(token, documentId, cleanRows);
+    }
+  }
+
+  private async appendTableFallback(token: string, documentId: string, rows: string[][]): Promise<void> {
+    const text = rowsToPlainTable(rows);
+    const res = await postJson<{ code: number; msg: string }>(
+      `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+      token,
+      { children: [codeBlock(text)], index: -1 }
     );
-    if (tableRes.code !== 0) throw new Error(`飞书创建表格失败: ${tableRes.code} ${tableRes.msg}`);
-    const cellIds = tableRes.data?.children?.[0]?.children || [];
-    if (cellIds.length < normalizedRows.length * columnSize) {
-      throw new Error('飞书创建表格成功，但没有返回完整单元格 ID');
-    }
-    for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
-      for (let columnIndex = 0; columnIndex < columnSize; columnIndex += 1) {
-        const text = cleanInline(normalizedRows[rowIndex][columnIndex] || '');
-        if (!text) continue;
-        const cellId = cellIds[rowIndex * columnSize + columnIndex];
-        const res = await postJson<{ code: number; msg: string }>(
-          `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
-          token,
-          { children: [textBlock(text)], index: -1 }
-        );
-        if (res.code !== 0) throw new Error(`飞书写入表格单元格失败: ${res.code} ${res.msg}`);
-      }
-    }
+    if (res.code !== 0) throw new Error(`飞书写入兼容表格失败: ${res.code} ${res.msg}`);
   }
 }
 
@@ -287,6 +307,30 @@ async function postJson<T>(url: string, token: string, body: unknown): Promise<T
 function isResourceDeletedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('1770003') || /resource deleted/i.test(message);
+}
+
+function isInvalidParamError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('1770001') || /invalid param/i.test(message);
+}
+
+function rowsToPlainTable(rows: string[][]): string {
+  const cleanRows = normalizeTableRows(rows);
+  const columnSize = Math.max(...cleanRows.map((row) => row.length), 1);
+  const normalizedRows = cleanRows.map((row) => [...row, ...Array(columnSize - row.length).fill('')].map(cleanInline));
+  const widths = Array.from({ length: columnSize }, (_, index) => Math.min(42, Math.max(...normalizedRows.map((row) => displayWidth(row[index] || '')))));
+  return normalizedRows
+    .map((row) => row.map((cell, index) => padDisplay(cell, widths[index])).join(' | '))
+    .join('\n');
+}
+
+function displayWidth(value: string): number {
+  return Array.from(value).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 2 : 1), 0);
+}
+
+function padDisplay(value: string, width: number): string {
+  const clipped = Array.from(value).slice(0, 42).join('');
+  return clipped + ' '.repeat(Math.max(0, width - displayWidth(clipped)));
 }
 
 function sleep(ms: number): Promise<void> {
