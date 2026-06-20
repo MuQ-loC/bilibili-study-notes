@@ -147,8 +147,9 @@ type CourseLesson = {
   course_id: string;
   index: number;
   url: string;
-  status: 'queued' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
+  status: 'queued' | 'cached' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
   error: string;
+  audio_path?: string;
   video?: Video;
   transcript?: Transcript;
   corrected_transcript?: Transcript;
@@ -374,6 +375,21 @@ function App() {
     setCourseStatus(`已加载：${res.course.title} / ${res.lessons.length} 课时`);
   }
 
+  async function recoverAsrCache() {
+    setLessonBusy(true);
+    setCourseStatus('正在扫描 notes/asr 本地音频缓存...');
+    try {
+      const res = await api<{ recovered: number; courses: Course[] }>('/api/courses/recover-asr-cache', {});
+      setCourses(res.courses);
+      if (res.courses[0]) await loadCourse(res.courses[0].id);
+      setCourseStatus(`已恢复 ${res.recovered} 个本地 ASR 缓存课时`);
+    } catch (err) {
+      setCourseStatus(`恢复缓存失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
   function loadLessonDraft(lesson: CourseLesson | null) {
     if (!lesson) {
       setLessonTranscriptDraft('');
@@ -406,6 +422,22 @@ function App() {
       setCourseStatus('课时内容已保存');
     } catch (err) {
       setCourseStatus(`保存失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
+  async function transcribeActiveLesson() {
+    if (!activeLesson) return;
+    setLessonBusy(true);
+    setCourseStatus('正在用本地音频缓存继续转写...');
+    try {
+      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/transcribe`, {});
+      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setLessonTranscriptDraft(updated.transcript?.content || '');
+      setCourseStatus('课时转写完成，可以继续校正/总结');
+    } catch (err) {
+      setCourseStatus(`转写失败：${(err as Error).message}`);
     } finally {
       setLessonBusy(false);
     }
@@ -1349,6 +1381,10 @@ function App() {
                 label: course.title
               }))}
             />
+            <Space className="topGap" wrap>
+              <Button size="small" icon={<ReloadOutlined />} onClick={loadCourses}>刷新</Button>
+              <Button size="small" icon={<FolderOpenOutlined />} loading={lessonBusy} onClick={recoverAsrCache}>恢复缓存</Button>
+            </Space>
             <Alert className="compactAlert topGap" type={courseStatus.startsWith('失败') || courseStatus.includes('失败') ? 'error' : 'info'} showIcon message={courseStatus} />
           </Card>
 
@@ -1371,7 +1407,7 @@ function App() {
                       {String(lesson.index).padStart(2, '0')} {lesson.video?.title || lesson.url}
                     </span>
                     <span className="lessonMeta">
-                      <Tag color={lesson.status === 'done' ? 'green' : lesson.status === 'error' ? 'red' : 'processing'}>{lesson.status}</Tag>
+                      <Tag color={lesson.status === 'done' ? 'green' : lesson.status === 'error' ? 'red' : lesson.status === 'cached' ? 'gold' : 'processing'}>{lesson.status}</Tag>
                       {lesson.note ? <Tag color="purple">已存笔记</Tag> : null}
                     </span>
                   </button>
@@ -1391,6 +1427,9 @@ function App() {
                 <Space wrap>
                   <Button icon={<SaveOutlined />} loading={lessonBusy} onClick={saveLessonDraft}>
                     保存修改
+                  </Button>
+                  <Button icon={<AudioOutlined />} loading={lessonBusy} disabled={!activeLesson.audio_path} onClick={transcribeActiveLesson}>
+                    继续转写
                   </Button>
                   <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={summarizeActiveLesson}>
                     继续总结

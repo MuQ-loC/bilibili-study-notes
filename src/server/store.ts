@@ -123,6 +123,7 @@ export class MemoryStore {
       url: input.url,
       status: input.status || current?.status || 'queued',
       error: input.error ?? current?.error ?? '',
+      audio_path: input.audio_path ?? current?.audio_path ?? '',
       video: input.video ?? current?.video,
       transcript: input.transcript ?? current?.transcript,
       corrected_transcript: input.corrected_transcript ?? current?.corrected_transcript,

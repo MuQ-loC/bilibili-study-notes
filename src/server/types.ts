@@ -47,8 +47,9 @@ export type CourseLesson = {
   course_id: string;
   index: number;
   url: string;
-  status: 'queued' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
+  status: 'queued' | 'cached' | 'analyzing' | 'transcribing' | 'correcting' | 'summarizing' | 'done' | 'error';
   error: string;
+  audio_path?: string;
   video?: Video;
   transcript?: Transcript;
   corrected_transcript?: Transcript;

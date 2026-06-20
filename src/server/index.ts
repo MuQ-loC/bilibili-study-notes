@@ -137,6 +137,11 @@ app.get('/api/courses', asyncHandler(async (_req, res) => {
   res.json({ courses: store.listCourses() });
 }));
 
+app.post('/api/courses/recover-asr-cache', asyncHandler(async (_req, res) => {
+  const recovered = await recoverAsrCache();
+  res.json({ recovered, courses: store.listCourses() });
+}));
+
 app.get('/api/courses/:id', asyncHandler(async (req, res) => {
   const course = store.getCourse(String(req.params.id));
   res.json({ course, lessons: store.listCourseLessons(course.id) });
@@ -162,6 +167,17 @@ app.post('/api/course-lessons/:id', asyncHandler(async (req, res) => {
     error: req.body.error
   });
   res.json(lesson);
+}));
+
+app.post('/api/course-lessons/:id/transcribe', asyncHandler(async (req, res) => {
+  const lesson = store.getCourseLesson(String(req.params.id));
+  if (!lesson.video) throw new Error('lesson has no video info');
+  const audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
+  if (!audioPath) throw new Error('lesson has no cached audio path');
+  await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
+  const transcript = await asr.transcribeAudio(lesson.video, audioPath);
+  await store.saveTranscript(lesson.video.id, transcript);
+  res.json(await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' }));
 }));
 
 app.post('/api/course-lessons/:id/summarize', asyncHandler(async (req, res) => {
@@ -325,6 +341,71 @@ function normalizeBilibiliUrl(raw: string): string {
     }
   })();
   return `https://www.bilibili.com/video/${bvid}${Number(page) > 1 ? `?p=${Number(page)}` : ''}`;
+}
+
+async function recoverAsrCache(): Promise<number> {
+  const workDir = cfg.asr.work_dir || 'notes/asr';
+  const entries = await fs.readdir(workDir, { withFileTypes: true }).catch(() => []);
+  const caches = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const match = entry.name.match(/^(BV[0-9A-Za-z]{8,})-(\d+)$/i);
+    if (!match) continue;
+    const audioDir = path.join(workDir, entry.name, 'audio');
+    const files = await fs.readdir(audioDir, { withFileTypes: true }).catch(() => []);
+    const audioFiles = [];
+    for (const file of files) {
+      if (!file.isFile() || file.name.endsWith('.part')) continue;
+      const audioPath = path.join(audioDir, file.name);
+      const stat = await fs.stat(audioPath).catch(() => undefined);
+      if (stat && stat.size > 0) audioFiles.push({ path: audioPath, size: stat.size });
+    }
+    if (!audioFiles.length) continue;
+    audioFiles.sort((a, b) => b.size - a.size);
+    caches.push({ bvid: match[1], cid: Number(match[2]), audioPath: audioFiles[0].path });
+  }
+
+  let recovered = 0;
+  const byBvid = new Map<string, typeof caches>();
+  for (const cache of caches) {
+    const list = byBvid.get(cache.bvid) || [];
+    list.push(cache);
+    byBvid.set(cache.bvid, list);
+  }
+
+  for (const [bvid, items] of byBvid) {
+    const sourceUrl = `https://www.bilibili.com/video/${bvid}`;
+    const existing = store.listCourses().find((course) => course.source_url.includes(bvid));
+    const course = existing || await store.createCourse(sourceUrl, `ASR缓存 ${bvid}`);
+    const videos = await bilibili.listVideoPageInfos(sourceUrl).catch(() => []);
+    const byCid = new Map(videos.map((video, index) => [video.cid, { video, index: index + 1 }]));
+    const ordered = [...items].sort((a, b) => (byCid.get(a.cid)?.index || a.cid) - (byCid.get(b.cid)?.index || b.cid));
+    for (const [fallbackIndex, cache] of ordered.entries()) {
+      const matched = byCid.get(cache.cid);
+      const index = matched?.index || fallbackIndex + 1;
+      const video = matched?.video || {
+        id: randomUUID(),
+        url: `${sourceUrl}${index > 1 ? `?p=${index}` : ''}`,
+        bvid,
+        cid: cache.cid,
+        title: `${bvid} - ${cache.cid}`,
+        owner: '',
+        cover_url: '',
+        duration: 0
+      };
+      await store.upsertCourseLesson({
+        course_id: course.id,
+        index,
+        url: video.url,
+        video,
+        status: 'cached',
+        audio_path: cache.audioPath,
+        error: `已发现本地音频缓存：${cache.audioPath}`
+      });
+      recovered += 1;
+    }
+  }
+  return recovered;
 }
 
 function runCapture(command: string, args: string[]): Promise<string> {

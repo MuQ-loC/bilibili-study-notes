@@ -23,7 +23,14 @@ export class ASRProvider {
     return { source: `openai_asr/${this.cfg.model}`, language: 'zh-CN', content: text };
   }
 
-  private async transcribeLocal(video: Video, onProgress?: (message: string) => void): Promise<Transcript> {
+  async transcribeAudio(video: Video, audioPath: string, onProgress?: (message: string) => void): Promise<Transcript> {
+    if (this.cfg.provider !== 'local') {
+      throw new Error('cached audio transcription requires local ASR');
+    }
+    return this.transcribeLocal(video, onProgress, audioPath);
+  }
+
+  private async transcribeLocal(video: Video, onProgress?: (message: string) => void, audioPath?: string): Promise<Transcript> {
     const pythonPath = this.cfg.python_path?.trim() || 'python';
     const scriptPath = path.join('tools', 'transcribe_bilibili.py');
     const workDir = path.join(this.cfg.work_dir, `${video.bvid}-${video.cid || video.id}`);
@@ -39,6 +46,7 @@ export class ASRProvider {
       '--device',
       this.cfg.device || 'auto'
     ];
+    if (audioPath) args.push('--audio', audioPath);
     const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
     const content = await runJSONLines(pythonPath, args, env, onProgress);
     return { source: `local_asr/${path.basename(this.cfg.model || 'small')}`, language: 'zh-CN', content };

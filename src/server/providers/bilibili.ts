@@ -99,6 +99,11 @@ export class BilibiliClient {
   }
 
   async listVideoPages(rawUrl: string): Promise<string[]> {
+    const videos = await this.listVideoPageInfos(rawUrl);
+    return videos.map((video) => video.url);
+  }
+
+  async listVideoPageInfos(rawUrl: string): Promise<Video[]> {
     let bvid = extractBvid(rawUrl);
     if (!bvid && rawUrl) {
       const resolved = await this.resolveRedirect(rawUrl).catch(() => '');
@@ -109,10 +114,19 @@ export class BilibiliClient {
     const view = await this.fetchJson<ViewResponse>(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, baseUrl);
     if (view.code !== 0) return [];
     const pages = view.data.pages || [];
-    if (pages.length <= 1) return [baseUrl];
-    return pages
+    const pageList = pages.length ? pages : [{ cid: view.data.cid, page: 1, part: view.data.title, duration: view.data.duration }];
+    return pageList
       .sort((a, b) => a.page - b.page)
-      .map((page) => `${baseUrl}${page.page > 1 ? `?p=${page.page}` : ''}`);
+      .map((page) => ({
+        id: crypto.randomUUID(),
+        url: `${baseUrl}${page.page > 1 ? `?p=${page.page}` : ''}`,
+        bvid,
+        cid: page.cid || view.data.cid || 0,
+        title: page.part?.trim() && pageList.length > 1 ? `${view.data.title} - P${page.page} ${page.part.trim()}` : view.data.title,
+        owner: view.data.owner?.name || '',
+        cover_url: view.data.pic,
+        duration: page.duration || view.data.duration
+      }));
   }
 
   private async resolveRedirect(rawUrl: string): Promise<string> {
