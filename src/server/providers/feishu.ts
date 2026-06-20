@@ -1,5 +1,9 @@
 import type { AppConfig, FeishuTarget, Note } from '../types.js';
 
+type FeishuBlock = Record<string, unknown>;
+type TablePlan = { kind: 'table'; rows: string[][] };
+type RenderItem = FeishuBlock | TablePlan;
+
 export class FeishuProvider {
   constructor(private cfg: AppConfig['feishu']) {}
 
@@ -37,15 +41,78 @@ export class FeishuProvider {
     return res.data.document.document_id;
   }
 
-  private async appendBlocks(token: string, documentId: string, blocks: unknown[]): Promise<void> {
-    const children = blocks.length ? blocks : [textBlock('暂无内容')];
-    for (let i = 0; i < children.length; i += 40) {
-      const res = await postJson<{ code: number; msg: string }>(
-        `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
-        token,
-        { children: children.slice(i, i + 40), index: -1 }
-      );
-      if (res.code !== 0) throw new Error(`飞书追加文档块失败: ${res.code} ${res.msg}`);
+  private async appendBlocks(token: string, documentId: string, blocks: RenderItem[]): Promise<void> {
+    const items = blocks.length ? blocks : [textBlock('暂无内容')];
+    let pending: FeishuBlock[] = [];
+
+    const flushPending = async () => {
+      if (!pending.length) return;
+      for (let i = 0; i < pending.length; i += 40) {
+        const res = await postJson<{ code: number; msg: string }>(
+          `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+          token,
+          { children: pending.slice(i, i + 40), index: -1 }
+        );
+        if (res.code !== 0) throw new Error(`飞书追加文档块失败: ${res.code} ${res.msg}`);
+      }
+      pending = [];
+    };
+
+    for (const item of items) {
+      if (isTablePlan(item)) {
+        await flushPending();
+        await this.appendTable(token, documentId, item.rows);
+      } else {
+        pending.push(item);
+      }
+    }
+    await flushPending();
+  }
+
+  private async appendTable(token: string, documentId: string, rows: string[][]): Promise<void> {
+    const cleanRows = normalizeTableRows(rows);
+    if (!cleanRows.length) return;
+    const columnSize = Math.max(...cleanRows.map((row) => row.length), 1);
+    const normalizedRows = cleanRows.map((row) => [...row, ...Array(columnSize - row.length).fill('')]);
+    const tableRes = await postJson<{
+      code: number;
+      msg: string;
+      data?: { children?: Array<{ block_id?: string; children?: string[] }> };
+    }>(
+      `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${documentId}/children`,
+      token,
+      {
+        children: [
+          {
+            block_type: 31,
+            table: {
+              property: {
+                row_size: normalizedRows.length,
+                column_size: columnSize
+              }
+            }
+          }
+        ],
+        index: -1
+      }
+    );
+    if (tableRes.code !== 0) throw new Error(`飞书创建表格失败: ${tableRes.code} ${tableRes.msg}`);
+    const cellIds = tableRes.data?.children?.[0]?.children || [];
+    if (cellIds.length < normalizedRows.length * columnSize) {
+      throw new Error('飞书创建表格成功，但没有返回完整单元格 ID');
+    }
+    for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+      for (let columnIndex = 0; columnIndex < columnSize; columnIndex += 1) {
+        const text = cleanInline(normalizedRows[rowIndex][columnIndex] || '');
+        if (!text) continue;
+        const cellId = cellIds[rowIndex * columnSize + columnIndex];
+        const res = await postJson<{ code: number; msg: string }>(
+          `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${cellId}/children`,
+          token,
+          { children: [textBlock(text)], index: -1 }
+        );
+        if (res.code !== 0) throw new Error(`飞书写入表格单元格失败: ${res.code} ${res.msg}`);
+      }
     }
   }
 }
@@ -66,37 +133,83 @@ function tokenFromUrl(value: string, patterns: RegExp[]): string {
   return '';
 }
 
-function markdownToBlocks(markdown: string): unknown[] {
-  const blocks: unknown[] = [];
+function markdownToBlocks(markdown: string): RenderItem[] {
+  const blocks: RenderItem[] = [];
   let inCode = false;
   let codeLines: string[] = [];
-  for (const raw of markdown.split('\n')) {
-    const line = raw.trimEnd();
+  const lines = markdown.split('\n');
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].trimEnd();
     const trimmed = line.trim();
     if (trimmed.startsWith('```')) {
       if (inCode) {
         if (codeLines.join('\n').trim()) blocks.push(codeBlock(codeLines.join('\n')));
         codeLines = [];
         inCode = false;
-      } else inCode = true;
+      } else {
+        inCode = true;
+      }
       continue;
     }
     if (inCode) {
       codeLines.push(line);
       continue;
     }
-    if (!trimmed) continue;
+    if (!trimmed || trimmed === '---') continue;
+
+    const table = readMarkdownTable(lines, i);
+    if (table) {
+      blocks.push({ kind: 'table', rows: table.rows });
+      i = table.endIndex;
+      continue;
+    }
+
     blocks.push(markdownLineToBlock(trimmed));
   }
   if (inCode && codeLines.join('\n').trim()) blocks.push(codeBlock(codeLines.join('\n')));
   return blocks;
 }
 
-function markdownLineToBlock(line: string): unknown {
+function readMarkdownTable(lines: string[], startIndex: number): { rows: string[][]; endIndex: number } | undefined {
+  const first = lines[startIndex]?.trim();
+  const second = lines[startIndex + 1]?.trim();
+  if (!isTableRow(first) || !isTableSeparator(second)) return undefined;
+  const rows: string[][] = [splitTableRow(first)];
+  let endIndex = startIndex + 1;
+  for (let i = startIndex + 2; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (!isTableRow(line)) break;
+    rows.push(splitTableRow(line));
+    endIndex = i;
+  }
+  return { rows, endIndex };
+}
+
+function isTableRow(value = ''): boolean {
+  return value.includes('|') && splitTableRow(value).length >= 2;
+}
+
+function isTableSeparator(value = ''): boolean {
+  const cells = splitTableRow(value);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitTableRow(value: string): string[] {
+  const trimmed = value.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map((cell) => cell.replace(/\\\|/g, '|').trim());
+}
+
+function markdownLineToBlock(line: string): FeishuBlock {
   const heading = line.match(/^(#{1,6})\s+(.+)$/);
   if (heading) {
     const level = heading[1].length;
     return richTextBlock(2 + level, `heading${level}`, cleanInline(heading[2]));
+  }
+  const numberedHeading = line.match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+  if (numberedHeading) {
+    const level = numberedHeading[1].includes('.') ? 3 : 2;
+    return richTextBlock(level + 2, `heading${level}`, cleanInline(`${numberedHeading[1]} ${numberedHeading[2]}`));
   }
   const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
   if (bullet) return richTextBlock(12, 'bullet', cleanInline(bullet[1]));
@@ -105,6 +218,16 @@ function markdownLineToBlock(line: string): unknown {
   const quote = line.match(/^>\s+(.+)$/);
   if (quote) return richTextBlock(15, 'quote', cleanInline(quote[1]));
   return textBlock(cleanInline(line));
+}
+
+function normalizeTableRows(rows: string[][]): string[][] {
+  return rows
+    .map((row) => row.map((cell) => cell.trim()))
+    .filter((row) => row.some(Boolean));
+}
+
+function isTablePlan(value: RenderItem): value is TablePlan {
+  return typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'table';
 }
 
 function cleanInline(value: string): string {
@@ -118,15 +241,15 @@ function cleanInline(value: string): string {
     .trim();
 }
 
-function textBlock(text: string): unknown {
+function textBlock(text: string): FeishuBlock {
   return richTextBlock(2, 'text', text);
 }
 
-function codeBlock(text: string): unknown {
+function codeBlock(text: string): FeishuBlock {
   return richTextBlock(14, 'code', text);
 }
 
-function richTextBlock(blockType: number, key: string, text: string): unknown {
+function richTextBlock(blockType: number, key: string, text: string): FeishuBlock {
   return {
     block_type: blockType,
     [key]: {
@@ -149,4 +272,3 @@ async function postJson<T>(url: string, token: string, body: unknown): Promise<T
   if (!res.ok) throw new Error(`飞书 HTTP ${res.status}: ${text}`);
   return JSON.parse(text) as T;
 }
-
