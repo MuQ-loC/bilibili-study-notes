@@ -1672,135 +1672,148 @@ function App() {
     </Row>
   );
 
-  const modelSettingsPane = (
-    <Card
-      className="modelSettingsCard"
-      title="模型设置"
-      extra={<Button type="primary" loading={configBusy} onClick={saveRuntimeConfig}>保存并生效</Button>}
-    >
+  const settingsPane = (
+    <Space direction="vertical" size={16} className="full settingsPane">
+      <Alert
+        type={configStatus.startsWith('Save failed') || configStatus.startsWith('Load failed') ? 'error' : 'info'}
+        showIcon
+        message={configStatus}
+        description={'\u8fd9\u91cc\u4fee\u6539\u672c\u673a config.json\uff0c\u4fdd\u5b58\u540e\u7acb\u5373\u751f\u6548\u3002\u5bc6\u94a5\u6846\u7559\u7a7a\u5c31\u4fdd\u7559\u539f\u914d\u7f6e\u3002'}
+        action={<Button type="primary" loading={configBusy} onClick={saveRuntimeConfig}>{'\u4fdd\u5b58\u8bbe\u7f6e\u5e76\u7acb\u5373\u751f\u6548'}</Button>}
+      />
       {configDraft ? (
-        <Space direction="vertical" size={12} className="full">
-          <Alert
-            type={configStatus.startsWith('Save failed') || configStatus.startsWith('Load failed') ? 'error' : 'info'}
-            showIcon
-            message={configStatus}
-            description="AI Model 用于总结、校正和短标题；ASR Model 用于本地 Whisper 转写。密钥框留空会保留当前配置。"
-          />
-          <Row gutter={[12, 12]}>
-            <Col xs={24} lg={12}>
-              <Form layout="vertical">
-                <Form.Item label="AI Provider">
-                  <Select
-                    value={configDraft.ai.provider}
-                    onChange={(value) => patchConfig('ai', 'provider', value)}
-                    options={[
-                      { value: 'spark', label: 'Spark / 星火' },
-                      { value: 'openai_compatible', label: 'OpenAI Compatible' },
-                      { value: 'deepseek', label: 'DeepSeek' },
-                      { value: 'ollama', label: 'Ollama' },
-                      { value: 'dify', label: 'Dify' }
-                    ]}
-                  />
-                </Form.Item>
-                <Form.Item label="AI Model">
-                  <Input
-                    value={configDraft.ai.model}
-                    onChange={(event) => patchConfig('ai', 'model', event.target.value)}
-                    placeholder="generalv3.5 / 4.0Ultra / deepseek-chat / gpt-4o-mini"
-                  />
-                </Form.Item>
-                <Form.Item label="AI Base URL">
-                  <Input
-                    value={configDraft.ai.base_url}
-                    onChange={(event) => patchConfig('ai', 'base_url', event.target.value)}
-                    placeholder="Spark WebSocket 可留空；OpenAI-compatible 填 /v1 地址"
-                  />
-                </Form.Item>
-                <Form.Item label={`API Key${runtimeConfig?.ai.api_key_configured ? ' (configured)' : ''}`}>
-                  <Input.Password
-                    value={configDraft.ai.api_key || ''}
-                    onChange={(event) => patchConfig('ai', 'api_key', event.target.value)}
-                    placeholder="留空保留当前 key"
-                  />
-                </Form.Item>
-                {configDraft.ai.provider === 'spark' ? (
+        <>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} xl={12}>
+              <Card title={'\u4e00\u3001\u603b\u7ed3\u6a21\u578b'} extra={<Tag color="blue">AI</Tag>}>
+                <Form layout="vertical">
+                  <Form.Item label={'\u6a21\u578b\u670d\u52a1\u5546'}>
+                    <Select
+                      value={configDraft.ai.provider}
+                      onChange={(value) => patchConfig('ai', 'provider', value)}
+                      options={[
+                        { value: 'spark', label: '\u8baf\u98de\u661f\u706b Spark' },
+                        { value: 'openai_compatible', label: 'OpenAI \u517c\u5bb9\u63a5\u53e3' },
+                        { value: 'deepseek', label: 'DeepSeek' },
+                        { value: 'ollama', label: 'Ollama \u672c\u5730\u6a21\u578b' },
+                        { value: 'dify', label: 'Dify \u5e94\u7528' }
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item label={'\u603b\u7ed3\u6a21\u578b\u540d'}>
+                    <Input
+                      value={configDraft.ai.model}
+                      onChange={(event) => patchConfig('ai', 'model', event.target.value)}
+                      placeholder="generalv3.5 / 4.0Ultra / deepseek-chat / gpt-4o-mini"
+                    />
+                  </Form.Item>
+                  <Form.Item label={'\u63a5\u53e3\u5730\u5740'}>
+                    <Input
+                      value={configDraft.ai.base_url}
+                      onChange={(event) => patchConfig('ai', 'base_url', event.target.value)}
+                      placeholder="Spark WebSocket can be empty; OpenAI-compatible uses /v1 URL"
+                    />
+                  </Form.Item>
+                  <Form.Item label={'\u901a\u7528 API Key' + (runtimeConfig?.ai.api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password
+                      value={configDraft.ai.api_key || ''}
+                      onChange={(event) => patchConfig('ai', 'api_key', event.target.value)}
+                      placeholder="DeepSeek / OpenAI-compatible key; leave blank to keep current key"
+                    />
+                  </Form.Item>
+                </Form>
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card title={'\u4e8c\u3001\u661f\u706b\u4e13\u7528\u5bc6\u94a5'} extra={<Tag color={configDraft.ai.provider === 'spark' ? 'green' : 'default'}>{configDraft.ai.provider === 'spark' ? '\u5f53\u524d\u4f7f\u7528' : '\u53ef\u9009'}</Tag>}>
+                <Form layout="vertical">
+                  <Form.Item label={'Spark APPID' + (runtimeConfig?.ai.spark_app_id_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.ai.spark_app_id || ''} onChange={(event) => patchConfig('ai', 'spark_app_id', event.target.value)} placeholder="Leave blank to keep current APPID" />
+                  </Form.Item>
+                  <Form.Item label={'Spark APIKey' + (runtimeConfig?.ai.spark_api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.ai.spark_api_key || ''} onChange={(event) => patchConfig('ai', 'spark_api_key', event.target.value)} placeholder="Leave blank to keep current APIKey" />
+                  </Form.Item>
+                  <Form.Item label={'Spark APISecret' + (runtimeConfig?.ai.spark_api_secret_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.ai.spark_api_secret || ''} onChange={(event) => patchConfig('ai', 'spark_api_secret', event.target.value)} placeholder="Leave blank to keep current APISecret" />
+                  </Form.Item>
+                </Form>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24} xl={12}>
+              <Card title={'\u4e09\u3001\u8f6c\u5199\u6a21\u578b\uff08Whisper / ASR\uff09'} extra={<Tag color="gold">{'\u5b57\u5e55\u8f6c\u5199'}</Tag>}>
+                <Form layout="vertical">
+                  <Form.Item label={'\u8f6c\u5199\u65b9\u5f0f'}>
+                    <Select
+                      value={configDraft.asr.provider}
+                      onChange={(value) => patchConfig('asr', 'provider', value)}
+                      options={[
+                        { value: 'local', label: '\u672c\u5730 faster-whisper' },
+                        { value: 'openai', label: '\u4e91\u7aef OpenAI \u517c\u5bb9 ASR' },
+                        { value: 'none', label: '\u5173\u95ed\u8f6c\u5199' }
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item label={'Whisper / ASR \u6a21\u578b'}>
+                    <Input
+                      value={configDraft.asr.model}
+                      onChange={(event) => patchConfig('asr', 'model', event.target.value)}
+                      placeholder="Local model path, or cloud model name like whisper-1"
+                    />
+                  </Form.Item>
                   <Row gutter={[8, 8]}>
                     <Col xs={24} md={8}>
-                      <Form.Item label={`Spark APPID${runtimeConfig?.ai.spark_app_id_configured ? ' (configured)' : ''}`}>
-                        <Input.Password value={configDraft.ai.spark_app_id || ''} onChange={(event) => patchConfig('ai', 'spark_app_id', event.target.value)} placeholder="留空保留" />
+                      <Form.Item label={'\u8fd0\u884c\u8bbe\u5907'}>
+                        <Select
+                          value={configDraft.asr.device || 'auto'}
+                          onChange={(value) => patchConfig('asr', 'device', value)}
+                          options={[
+                            { value: 'auto', label: '\u81ea\u52a8' },
+                            { value: 'cuda', label: 'CUDA / \u663e\u5361' },
+                            { value: 'cpu', label: 'CPU' }
+                          ]}
+                        />
                       </Form.Item>
                     </Col>
-                    <Col xs={24} md={8}>
-                      <Form.Item label={`Spark APIKey${runtimeConfig?.ai.spark_api_key_configured ? ' (configured)' : ''}`}>
-                        <Input.Password value={configDraft.ai.spark_api_key || ''} onChange={(event) => patchConfig('ai', 'spark_api_key', event.target.value)} placeholder="留空保留" />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Form.Item label={`Spark APISecret${runtimeConfig?.ai.spark_api_secret_configured ? ' (configured)' : ''}`}>
-                        <Input.Password value={configDraft.ai.spark_api_secret || ''} onChange={(event) => patchConfig('ai', 'spark_api_secret', event.target.value)} placeholder="留空保留" />
+                    <Col xs={24} md={16}>
+                      <Form.Item label={'\u97f3\u9891\u7f13\u5b58\u76ee\u5f55'}>
+                        <Input value={configDraft.asr.work_dir} onChange={(event) => patchConfig('asr', 'work_dir', event.target.value)} placeholder="notes/asr" />
                       </Form.Item>
                     </Col>
                   </Row>
-                ) : null}
-              </Form>
+                  <Form.Item label={'\u672c\u5730 Python \u73af\u5883'}>
+                    <Input value={configDraft.asr.python_path} onChange={(event) => patchConfig('asr', 'python_path', event.target.value)} placeholder="D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe" />
+                  </Form.Item>
+                </Form>
+              </Card>
             </Col>
-            <Col xs={24} lg={12}>
-              <Form layout="vertical">
-                <Form.Item label="ASR Provider">
-                  <Select
-                    value={configDraft.asr.provider}
-                    onChange={(value) => patchConfig('asr', 'provider', value)}
-                    options={[
-                      { value: 'local', label: 'Local faster-whisper' },
-                      { value: 'openai', label: 'OpenAI-compatible ASR' },
-                      { value: 'none', label: 'Disabled' }
-                    ]}
-                  />
-                </Form.Item>
-                <Form.Item label="ASR / Whisper Model">
-                  <Input
-                    value={configDraft.asr.model}
-                    onChange={(event) => patchConfig('asr', 'model', event.target.value)}
-                    placeholder="D:\\Ev\\...\\faster-whisper-small or whisper-1"
-                  />
-                </Form.Item>
-                <Row gutter={[8, 8]}>
-                  <Col xs={24} md={8}>
-                    <Form.Item label="Device">
-                      <Select
-                        value={configDraft.asr.device || 'auto'}
-                        onChange={(value) => patchConfig('asr', 'device', value)}
-                        options={[
-                          { value: 'auto', label: 'auto' },
-                          { value: 'cuda', label: 'cuda' },
-                          { value: 'cpu', label: 'cpu' }
-                        ]}
-                      />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={16}>
-                    <Form.Item label="Work Dir">
-                      <Input value={configDraft.asr.work_dir} onChange={(event) => patchConfig('asr', 'work_dir', event.target.value)} placeholder="notes/asr" />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <Form.Item label="Local Python Path">
-                  <Input value={configDraft.asr.python_path} onChange={(event) => patchConfig('asr', 'python_path', event.target.value)} placeholder="D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe" />
-                </Form.Item>
-                <Form.Item label="ASR OpenAI Base URL">
-                  <Input value={configDraft.asr.openai_base_url} onChange={(event) => patchConfig('asr', 'openai_base_url', event.target.value)} placeholder="https://api.openai.com/v1" />
-                </Form.Item>
-                <Form.Item label={`ASR API Key${runtimeConfig?.asr.openai_api_key_configured ? ' (configured)' : ''}`}>
-                  <Input.Password value={configDraft.asr.openai_api_key || ''} onChange={(event) => patchConfig('asr', 'openai_api_key', event.target.value)} placeholder="留空保留当前 key" />
-                </Form.Item>
-              </Form>
+            <Col xs={24} xl={12}>
+              <Card title={'\u56db\u3001\u4e91\u7aef ASR \u8ba4\u8bc1'} extra={<Tag color={configDraft.asr.provider === 'openai' ? 'green' : 'default'}>{configDraft.asr.provider === 'openai' ? '\u5f53\u524d\u4f7f\u7528' : '\u53ef\u9009'}</Tag>}>
+                <Form layout="vertical">
+                  <Form.Item label={'\u4e91\u7aef ASR \u63a5\u53e3\u5730\u5740'}>
+                    <Input value={configDraft.asr.openai_base_url} onChange={(event) => patchConfig('asr', 'openai_base_url', event.target.value)} placeholder="https://api.openai.com/v1" />
+                  </Form.Item>
+                  <Form.Item label={'\u4e91\u7aef ASR API Key' + (runtimeConfig?.asr.openai_api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.asr.openai_api_key || ''} onChange={(event) => patchConfig('asr', 'openai_api_key', event.target.value)} placeholder="Leave blank to keep current key" />
+                  </Form.Item>
+                  <Descriptions size="small" bordered column={1}>
+                    <Descriptions.Item label={'\u5f53\u524d\u603b\u7ed3\u6a21\u578b'}>{runtimeConfig?.ai.provider || '-'} / {runtimeConfig?.ai.model || '-'}</Descriptions.Item>
+                    <Descriptions.Item label={'\u5f53\u524d\u8f6c\u5199\u6a21\u578b'}>{runtimeConfig?.asr.provider || '-'} / {runtimeConfig?.asr.model || '-'}</Descriptions.Item>
+                    <Descriptions.Item label={'\u5f53\u524d\u8f6c\u5199\u8bbe\u5907'}>{runtimeConfig?.asr.device || '-'}</Descriptions.Item>
+                  </Descriptions>
+                </Form>
+              </Card>
             </Col>
           </Row>
-        </Space>
+        </>
       ) : (
-        <Empty description="Model config is loading" />
+        <Card>
+          <Empty description="Loading model config" />
+        </Card>
       )}
-    </Card>
+    </Space>
   );
 
   const dashboard = (
@@ -1827,8 +1840,6 @@ function App() {
           </Space>
         </Flex>
       </Card>
-
-      {modelSettingsPane}
 
       <Row gutter={[12, 12]} className="metricRow">
         <Col xs={12} md={6}>
@@ -1889,7 +1900,8 @@ function App() {
               { key: 'single', label: <span><VideoCameraOutlined /> 单视频工作台</span>, children: singleVideoPane },
               { key: 'batch', label: <span><FolderOpenOutlined /> 合集/专辑批量</span>, children: batchPane },
               { key: 'courses', label: <span><FileTextOutlined /> 课程管理</span>, children: coursePane },
-              { key: 'voice', label: <span><AudioOutlined /> 配音音色</span>, children: voicePane }
+              { key: 'voice', label: <span><AudioOutlined /> {'\u914d\u97f3\u97f3\u8272'}</span>, children: voicePane },
+              { key: 'settings', label: <span><RobotOutlined /> {'\u8bbe\u7f6e'}</span>, children: settingsPane }
             ]}
           />
         </Content>
