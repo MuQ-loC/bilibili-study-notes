@@ -118,6 +118,20 @@ type TTSPreview = {
   audio_url: string;
 };
 
+type AIProfileConfig = {
+  provider: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify' | 'spark';
+  base_url: string;
+  model: string;
+  api_key?: string;
+  spark_app_id?: string;
+  spark_api_key?: string;
+  spark_api_secret?: string;
+  api_key_configured?: boolean;
+  spark_app_id_configured?: boolean;
+  spark_api_key_configured?: boolean;
+  spark_api_secret_configured?: boolean;
+};
+
 type RuntimeConfig = {
   ai: {
     provider: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify' | 'spark';
@@ -131,6 +145,9 @@ type RuntimeConfig = {
     spark_app_id_configured?: boolean;
     spark_api_key_configured?: boolean;
     spark_api_secret_configured?: boolean;
+    summary?: AIProfileConfig;
+    correction?: AIProfileConfig;
+    title?: AIProfileConfig;
   };
   asr: {
     provider: 'none' | 'openai' | 'local' | 'spark';
@@ -400,7 +417,16 @@ function App() {
       const res = await api<RuntimeConfig>('/api/config');
       const draft = {
         ...res,
-        ai: { ...res.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
+        ai: {
+          ...res.ai,
+          api_key: '',
+          spark_app_id: '',
+          spark_api_key: '',
+          spark_api_secret: '',
+          summary: blankAIProfileSecrets(res.ai.summary),
+          correction: blankAIProfileSecrets(res.ai.correction),
+          title: blankAIProfileSecrets(res.ai.title)
+        },
         asr: { ...res.asr, openai_api_key: '', spark_app_id: '', spark_api_secret: '' }
       };
       setRuntimeConfig(res);
@@ -424,6 +450,32 @@ function App() {
     });
   }
 
+  function blankAIProfileSecrets(profile?: AIProfileConfig): AIProfileConfig | undefined {
+    if (!profile) return profile;
+    return { ...profile, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' };
+  }
+
+  function patchAIProfile(profileName: 'summary' | 'correction' | 'title', key: string, value: string) {
+    setConfigDraft((current) => {
+      if (!current) return current;
+      const base = current.ai[profileName] || {
+        provider: current.ai.provider,
+        base_url: current.ai.base_url,
+        model: current.ai.model
+      };
+      return {
+        ...current,
+        ai: {
+          ...current.ai,
+          [profileName]: {
+            ...base,
+            [key]: value
+          }
+        }
+      } as RuntimeConfig;
+    });
+  }
+
   async function saveRuntimeConfig() {
     if (!configDraft) return;
     setConfigBusy(true);
@@ -432,7 +484,16 @@ function App() {
       const saved = await api<RuntimeConfig>('/api/config', configDraft);
       const draft = {
         ...saved,
-        ai: { ...saved.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
+        ai: {
+          ...saved.ai,
+          api_key: '',
+          spark_app_id: '',
+          spark_api_key: '',
+          spark_api_secret: '',
+          summary: blankAIProfileSecrets(saved.ai.summary),
+          correction: blankAIProfileSecrets(saved.ai.correction),
+          title: blankAIProfileSecrets(saved.ai.title)
+        },
         asr: { ...saved.asr, openai_api_key: '', spark_app_id: '', spark_api_secret: '' }
       };
       setRuntimeConfig(saved);
@@ -1693,6 +1754,75 @@ function App() {
     </Row>
   );
 
+  function renderAIProfileCard(profileName: 'summary' | 'correction', title: string, tag: string) {
+    if (!configDraft) return null;
+    const profile = configDraft.ai[profileName] || {
+      provider: configDraft.ai.provider,
+      base_url: configDraft.ai.base_url,
+      model: configDraft.ai.model
+    };
+    const runtime = runtimeConfig?.ai[profileName];
+    return (
+      <Card title={title} extra={<Tag color="blue">{tag}</Tag>}>
+        <Form layout="vertical">
+          <Form.Item label={'\u6a21\u578b\u670d\u52a1\u5546'}>
+            <Select
+              value={profile.provider}
+              onChange={(value) => patchAIProfile(profileName, 'provider', value)}
+              options={[
+                { value: 'spark', label: '\u8baf\u98de\u661f\u706b Spark' },
+                { value: 'openai_compatible', label: 'OpenAI \u517c\u5bb9\u63a5\u53e3' },
+                { value: 'deepseek', label: 'DeepSeek' },
+                { value: 'ollama', label: 'Ollama \u672c\u5730\u6a21\u578b' },
+                { value: 'dify', label: 'Dify \u5e94\u7528' }
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label={'\u6a21\u578b\u540d'}>
+            <Input
+              value={profile.model}
+              onChange={(event) => patchAIProfile(profileName, 'model', event.target.value)}
+              placeholder="gpt-5.5 / generalv3.5 / 4.0Ultra / deepseek-chat"
+            />
+          </Form.Item>
+          <Form.Item label={'\u63a5\u53e3\u5730\u5740'}>
+            <Input
+              value={profile.base_url}
+              onChange={(event) => patchAIProfile(profileName, 'base_url', event.target.value)}
+              placeholder="OpenAI-compatible /v1 URL; Spark WebSocket can be empty"
+            />
+          </Form.Item>
+          <Form.Item label={'\u901a\u7528 API Key' + (runtime?.api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+            <Input.Password
+              value={profile.api_key || ''}
+              onChange={(event) => patchAIProfile(profileName, 'api_key', event.target.value)}
+              placeholder="Leave blank to keep current key"
+            />
+          </Form.Item>
+          {profile.provider === 'spark' ? (
+            <Row gutter={[8, 8]}>
+              <Col xs={24} md={8}>
+                <Form.Item label={'Spark APPID' + (runtime?.spark_app_id_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                  <Input.Password value={profile.spark_app_id || ''} onChange={(event) => patchAIProfile(profileName, 'spark_app_id', event.target.value)} placeholder="Leave blank to keep" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label={'Spark APIKey' + (runtime?.spark_api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                  <Input.Password value={profile.spark_api_key || ''} onChange={(event) => patchAIProfile(profileName, 'spark_api_key', event.target.value)} placeholder="Leave blank to keep" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label={'Spark APISecret' + (runtime?.spark_api_secret_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                  <Input.Password value={profile.spark_api_secret || ''} onChange={(event) => patchAIProfile(profileName, 'spark_api_secret', event.target.value)} placeholder="Leave blank to keep" />
+                </Form.Item>
+              </Col>
+            </Row>
+          ) : null}
+        </Form>
+      </Card>
+    );
+  }
+
   const settingsPane = (
     <Space direction="vertical" size={16} className="full settingsPane">
       <Alert
@@ -1706,59 +1836,10 @@ function App() {
         <>
           <Row gutter={[16, 16]}>
             <Col xs={24} xl={12}>
-              <Card title={'\u4e00\u3001\u603b\u7ed3\u6a21\u578b'} extra={<Tag color="blue">AI</Tag>}>
-                <Form layout="vertical">
-                  <Form.Item label={'\u6a21\u578b\u670d\u52a1\u5546'}>
-                    <Select
-                      value={configDraft.ai.provider}
-                      onChange={(value) => patchConfig('ai', 'provider', value)}
-                      options={[
-                        { value: 'spark', label: '\u8baf\u98de\u661f\u706b Spark' },
-                        { value: 'openai_compatible', label: 'OpenAI \u517c\u5bb9\u63a5\u53e3' },
-                        { value: 'deepseek', label: 'DeepSeek' },
-                        { value: 'ollama', label: 'Ollama \u672c\u5730\u6a21\u578b' },
-                        { value: 'dify', label: 'Dify \u5e94\u7528' }
-                      ]}
-                    />
-                  </Form.Item>
-                  <Form.Item label={'\u603b\u7ed3\u6a21\u578b\u540d'}>
-                    <Input
-                      value={configDraft.ai.model}
-                      onChange={(event) => patchConfig('ai', 'model', event.target.value)}
-                      placeholder="generalv3.5 / 4.0Ultra / deepseek-chat / gpt-4o-mini"
-                    />
-                  </Form.Item>
-                  <Form.Item label={'\u63a5\u53e3\u5730\u5740'}>
-                    <Input
-                      value={configDraft.ai.base_url}
-                      onChange={(event) => patchConfig('ai', 'base_url', event.target.value)}
-                      placeholder="Spark WebSocket can be empty; OpenAI-compatible uses /v1 URL"
-                    />
-                  </Form.Item>
-                  <Form.Item label={'\u901a\u7528 API Key' + (runtimeConfig?.ai.api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
-                    <Input.Password
-                      value={configDraft.ai.api_key || ''}
-                      onChange={(event) => patchConfig('ai', 'api_key', event.target.value)}
-                      placeholder="DeepSeek / OpenAI-compatible key; leave blank to keep current key"
-                    />
-                  </Form.Item>
-                </Form>
-              </Card>
+              {renderAIProfileCard('summary', '\u4e00\u3001\u603b\u7ed3\u6a21\u578b', '\u603b\u7ed3')}
             </Col>
             <Col xs={24} xl={12}>
-              <Card title={'\u4e8c\u3001\u661f\u706b\u4e13\u7528\u5bc6\u94a5'} extra={<Tag color={configDraft.ai.provider === 'spark' ? 'green' : 'default'}>{configDraft.ai.provider === 'spark' ? '\u5f53\u524d\u4f7f\u7528' : '\u53ef\u9009'}</Tag>}>
-                <Form layout="vertical">
-                  <Form.Item label={'Spark APPID' + (runtimeConfig?.ai.spark_app_id_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
-                    <Input.Password value={configDraft.ai.spark_app_id || ''} onChange={(event) => patchConfig('ai', 'spark_app_id', event.target.value)} placeholder="Leave blank to keep current APPID" />
-                  </Form.Item>
-                  <Form.Item label={'Spark APIKey' + (runtimeConfig?.ai.spark_api_key_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
-                    <Input.Password value={configDraft.ai.spark_api_key || ''} onChange={(event) => patchConfig('ai', 'spark_api_key', event.target.value)} placeholder="Leave blank to keep current APIKey" />
-                  </Form.Item>
-                  <Form.Item label={'Spark APISecret' + (runtimeConfig?.ai.spark_api_secret_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
-                    <Input.Password value={configDraft.ai.spark_api_secret || ''} onChange={(event) => patchConfig('ai', 'spark_api_secret', event.target.value)} placeholder="Leave blank to keep current APISecret" />
-                  </Form.Item>
-                </Form>
-              </Card>
+              {renderAIProfileCard('correction', '\u4e8c\u3001\u6821\u6b63\u6a21\u578b', '\u6821\u6b63')}
             </Col>
           </Row>
 

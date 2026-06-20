@@ -10,9 +10,23 @@ const defaultConfig: AppConfig = {
     base_url: 'https://api.shqbb.com/v1',
     api_key_env: 'NEWAPI_API_KEY',
     model: 'gpt-5.5',
+    correction_model: 'gpt-5.5',
+    title_model: 'gpt-5.5',
     spark_app_id_env: 'SPARK_APP_ID',
     spark_api_key_env: 'SPARK_API_KEY',
     spark_api_secret_env: 'SPARK_API_SECRET',
+    summary: {
+      provider: 'openai_compatible',
+      base_url: 'https://api.shqbb.com/v1',
+      api_key_env: 'NEWAPI_API_KEY',
+      model: 'gpt-5.5'
+    },
+    correction: {
+      provider: 'openai_compatible',
+      base_url: 'https://api.shqbb.com/v1',
+      api_key_env: 'NEWAPI_API_KEY',
+      model: 'gpt-5.5'
+    },
     dify_app_type: 'chat',
     dify_user: 'bilibili-study-notes'
   },
@@ -62,6 +76,9 @@ export function loadConfig(file = 'config.json'): AppConfig {
   cfg.ai.spark_app_id ||= cfg.ai.spark_app_id_env ? env(cfg.ai.spark_app_id_env) : '';
   cfg.ai.spark_api_key ||= cfg.ai.spark_api_key_env ? env(cfg.ai.spark_api_key_env) : '';
   cfg.ai.spark_api_secret ||= cfg.ai.spark_api_secret_env ? env(cfg.ai.spark_api_secret_env) : '';
+  hydrateAIProfile(cfg.ai.summary, cfg.ai);
+  hydrateAIProfile(cfg.ai.correction, cfg.ai);
+  hydrateAIProfile(cfg.ai.title, cfg.ai);
   if (env('ASR_PROVIDER')) cfg.asr.provider = env('ASR_PROVIDER') as AppConfig['asr']['provider'];
   if (env('ASR_MODEL')) cfg.asr.model = env('ASR_MODEL');
   if (env('LOCAL_ASR_MODEL')) cfg.asr.model = env('LOCAL_ASR_MODEL');
@@ -90,6 +107,23 @@ export function loadConfig(file = 'config.json'): AppConfig {
 
 function env(name?: string): string {
   return name ? process.env[name]?.trim() || '' : '';
+}
+
+function hydrateAIProfile(profile: AppConfig['ai']['summary'], base: AppConfig['ai']): void {
+  if (!profile) return;
+  profile.provider ||= base.provider;
+  profile.base_url ||= base.base_url;
+  profile.model ||= base.model;
+  profile.api_key ||= profile.api_key_env ? env(profile.api_key_env) : '';
+  profile.api_key ||= base.api_key;
+  profile.spark_app_id ||= profile.spark_app_id_env ? env(profile.spark_app_id_env) : '';
+  profile.spark_app_id ||= base.spark_app_id;
+  profile.spark_api_key ||= profile.spark_api_key_env ? env(profile.spark_api_key_env) : '';
+  profile.spark_api_key ||= base.spark_api_key;
+  profile.spark_api_secret ||= profile.spark_api_secret_env ? env(profile.spark_api_secret_env) : '';
+  profile.spark_api_secret ||= base.spark_api_secret;
+  profile.dify_app_type ||= base.dify_app_type;
+  profile.dify_user ||= base.dify_user;
 }
 
 function merge(base: unknown, patch: unknown): unknown {

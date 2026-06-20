@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { AppConfig, Summary, Video } from '../types.js';
+import type { AIServiceConfig, AppConfig, Summary, Video } from '../types.js';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 type SparkResponse = {
@@ -7,85 +7,88 @@ type SparkResponse = {
   payload?: { choices?: { status?: number; text?: Array<{ content?: string }> } };
 };
 
+type RequiredAIServiceConfig = Required<Pick<AIServiceConfig, 'provider' | 'base_url' | 'api_key' | 'model' | 'spark_app_id' | 'spark_api_key' | 'spark_api_secret' | 'dify_app_type' | 'dify_user'>> & AIServiceConfig;
+
 export class AIProvider {
   constructor(private cfg: AppConfig['ai']) {}
 
   async summarize(video: Video, transcript: string, instruction: string): Promise<Summary> {
-    const content = await this.complete(buildSummaryMessages(video, transcript, instruction));
-    return { id: '', video_id: video.id, model: this.modelName(), markdown: applyGlossary(content) };
+    const profile = this.profile('summary');
+    const content = await this.complete(buildSummaryMessages(video, transcript, instruction), profile);
+    return { id: '', video_id: video.id, model: this.modelName(profile), markdown: applyGlossary(content) };
   }
 
   async correctTranscript(video: Video, transcript: string): Promise<string> {
-    return this.complete(buildCorrectionMessages(video, transcript));
+    return this.complete(buildCorrectionMessages(video, transcript), this.profile('correction'));
   }
 
   async shortTitle(video: Video, text: string, index = 0): Promise<{ short_title: string; title: string }> {
     let raw = '';
     try {
-      raw = await this.complete(buildTitleMessages(video, text));
+      raw = await this.complete(buildTitleMessages(video, text), this.profile('title'));
     } catch {
       raw = '';
     }
     const short = cleanShortTitle(raw, video.title);
-    return { short_title: short, title: index > 0 ? `${String(index).padStart(2, '0')}-${short}` : short };
+    return { short_title: short, title: index > 0 ? String(index).padStart(2, '0') + '-' + short : short };
   }
 
-  private async complete(messages: ChatMessage[]): Promise<string> {
-    if (this.cfg.provider === 'dify') return this.completeDify(messages.at(-1)?.content || '');
-    if (this.cfg.provider === 'spark') return this.completeSpark(messages);
-    return this.completeOpenAICompatible(messages);
+  private async complete(messages: ChatMessage[], profile: RequiredAIServiceConfig): Promise<string> {
+    if (profile.provider === 'dify') return this.completeDify(messages.at(-1)?.content || '', profile);
+    if (profile.provider === 'spark') return this.completeSpark(messages, profile);
+    return this.completeOpenAICompatible(messages, profile);
   }
 
-  private async completeOpenAICompatible(messages: ChatMessage[]): Promise<string> {
-    const provider = this.cfg.provider;
-    const baseUrl = this.cfg.base_url || (provider === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'https://api.deepseek.com');
-    const model = this.cfg.model || (provider === 'ollama' ? 'qwen2.5:7b-instruct' : 'deepseek-chat');
-    if (provider !== 'ollama' && !this.cfg.api_key) throw new Error('未配置 AI API Key');
+  private async completeOpenAICompatible(messages: ChatMessage[], profile: RequiredAIServiceConfig): Promise<string> {
+    const provider = profile.provider;
+    const baseUrl = profile.base_url || (provider === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'https://api.deepseek.com');
+    const model = profile.model || (provider === 'ollama' ? 'qwen2.5:7b-instruct' : 'deepseek-chat');
+    if (provider !== 'ollama' && !profile.api_key) throw new Error('??? AI API Key');
 
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const res = await fetch(baseUrl.replace(/\/$/, '') + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.cfg.api_key ? { Authorization: `Bearer ${this.cfg.api_key}` } : {})
+        ...(profile.api_key ? { Authorization: 'Bearer ' + profile.api_key } : {})
       },
       body: JSON.stringify({ model, messages, temperature: 0.15 })
     });
-    if (!res.ok) throw new Error(`AI API HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error('AI API HTTP ' + res.status + ': ' + await res.text());
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
     if (data.error?.message) throw new Error(data.error.message);
     const content = data.choices?.[0]?.message?.content?.trim();
-    if (!content) throw new Error('AI API 没有返回内容');
+    if (!content) throw new Error('AI API ??????');
     return content;
   }
 
-  private async completeDify(prompt: string): Promise<string> {
-    if (!this.cfg.api_key) throw new Error('未配置 Dify API Key');
-    const appType = this.cfg.dify_app_type || 'chat';
+  private async completeDify(prompt: string, profile: RequiredAIServiceConfig): Promise<string> {
+    if (!profile.api_key) throw new Error('??? Dify API Key');
+    const appType = profile.dify_app_type || 'chat';
     const endpoint = appType === 'completion' ? '/completion-messages' : '/chat-messages';
-    const res = await fetch(`${this.cfg.base_url.replace(/\/$/, '')}${endpoint}`, {
+    const res = await fetch(profile.base_url.replace(/\/$/, '') + endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.cfg.api_key}` },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + profile.api_key },
       body: JSON.stringify({
         inputs: { query: prompt, prompt, text: prompt },
         query: appType === 'completion' ? undefined : prompt,
         response_mode: 'blocking',
-        user: this.cfg.dify_user || 'bilibili-study-notes'
+        user: profile.dify_user || 'bilibili-study-notes'
       })
     });
-    if (!res.ok) throw new Error(`Dify API HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error('Dify API HTTP ' + res.status + ': ' + await res.text());
     const data = (await res.json()) as { answer?: string; message?: string };
     if (data.message) throw new Error(data.message);
-    if (!data.answer?.trim()) throw new Error('Dify 没有返回内容');
+    if (!data.answer?.trim()) throw new Error('Dify ??????');
     return data.answer;
   }
 
-  private completeSpark(messages: ChatMessage[]): Promise<string> {
-    const appId = this.cfg.spark_app_id || '';
-    const apiKey = this.cfg.spark_api_key || '';
-    const apiSecret = this.cfg.spark_api_secret || '';
+  private completeSpark(messages: ChatMessage[], profile: RequiredAIServiceConfig): Promise<string> {
+    const appId = profile.spark_app_id || '';
+    const apiKey = profile.spark_api_key || '';
+    const apiSecret = profile.spark_api_secret || '';
     if (!appId || !apiKey || !apiSecret) throw new Error('Spark APPID/APIKey/APISecret is not configured');
-    const model = this.cfg.model || 'generalv3.5';
-    const url = this.signedSparkUrl(this.sparkEndpoint(model), apiKey, apiSecret);
+    const model = profile.model || 'generalv3.5';
+    const url = this.signedSparkUrl(this.sparkEndpoint(model, profile), apiKey, apiSecret);
     const domain = this.sparkDomain(model);
     const WebSocketImpl = globalThis.WebSocket;
     if (!WebSocketImpl) throw new Error('WebSocket is not available in this Node.js runtime');
@@ -105,18 +108,8 @@ export class AIProvider {
       socket.addEventListener('open', () => {
         socket.send(JSON.stringify({
           header: { app_id: appId, uid: 'bilibili-study-notes' },
-          parameter: {
-            chat: {
-              domain,
-              temperature: 0.15,
-              max_tokens: 8192
-            }
-          },
-          payload: {
-            message: {
-              text: normalizeSparkMessages(messages)
-            }
-          }
+          parameter: { chat: { domain, temperature: 0.15, max_tokens: 8192 } },
+          payload: { message: { text: normalizeSparkMessages(messages) } }
         }));
       });
 
@@ -124,9 +117,7 @@ export class AIProvider {
         try {
           const data = JSON.parse(String(event.data)) as SparkResponse;
           const code = data.header?.code ?? 0;
-          if (code !== 0) {
-            throw new Error(`Spark API ${code}: ${data.header?.message || 'request failed'}`);
-          }
+          if (code !== 0) throw new Error('Spark API ' + code + ': ' + (data.header?.message || 'request failed'));
           for (const item of data.payload?.choices?.text || []) content += item.content || '';
           if (data.header?.status === 2 || data.payload?.choices?.status === 2) {
             if (!settled) {
@@ -168,19 +159,19 @@ export class AIProvider {
   private signedSparkUrl(endpoint: string, apiKey: string, apiSecret: string): string {
     const parsed = new URL(endpoint);
     const host = parsed.host;
-    const path = parsed.pathname;
+    const urlPath = parsed.pathname;
     const date = new Date().toUTCString();
-    const signatureOrigin = `host: ${host}\ndate: ${date}\nGET ${path} HTTP/1.1`;
+    const signatureOrigin = 'host: ' + host + '\ndate: ' + date + '\nGET ' + urlPath + ' HTTP/1.1';
     const signature = crypto.createHmac('sha256', apiSecret).update(signatureOrigin).digest('base64');
-    const authorizationOrigin = `api_key="${apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signature}"`;
+    const authorizationOrigin = 'api_key="' + apiKey + '", algorithm="hmac-sha256", headers="host date request-line", signature="' + signature + '"';
     parsed.searchParams.set('authorization', Buffer.from(authorizationOrigin).toString('base64'));
     parsed.searchParams.set('date', date);
     parsed.searchParams.set('host', host);
     return parsed.toString();
   }
 
-  private sparkEndpoint(model: string): string {
-    if (this.cfg.base_url?.startsWith('ws')) return this.cfg.base_url;
+  private sparkEndpoint(model: string, profile: RequiredAIServiceConfig): string {
+    if (profile.base_url?.startsWith('ws')) return profile.base_url;
     const normalized = model.toLowerCase();
     if (normalized.includes('4.0') || normalized.includes('ultra')) return 'wss://spark-api.xf-yun.com/v4.0/chat';
     if (normalized.includes('3.5') || normalized.includes('max')) return 'wss://spark-api.xf-yun.com/v3.5/chat';
@@ -196,8 +187,29 @@ export class AIProvider {
     return 'general';
   }
 
-  private modelName(): string {
-    return this.cfg.provider === 'dify' ? `dify/${this.cfg.dify_app_type || 'chat'}` : this.cfg.model;
+  private modelName(profile: RequiredAIServiceConfig): string {
+    return profile.provider === 'dify' ? 'dify/' + (profile.dify_app_type || 'chat') : profile.model;
+  }
+
+  private profile(task: 'summary' | 'correction' | 'title'): RequiredAIServiceConfig {
+    const base = this.cfg as AIServiceConfig;
+    const override = (this.cfg[task] || {}) as AIServiceConfig;
+    const legacyModel = task === 'correction' ? this.cfg.correction_model : task === 'title' ? this.cfg.title_model : this.cfg.model;
+    return {
+      provider: override.provider || base.provider || 'openai_compatible',
+      base_url: override.base_url ?? base.base_url ?? '',
+      api_key: override.api_key ?? base.api_key ?? '',
+      api_key_env: override.api_key_env ?? base.api_key_env ?? '',
+      model: override.model || legacyModel || base.model || '',
+      spark_app_id: override.spark_app_id ?? base.spark_app_id ?? '',
+      spark_app_id_env: override.spark_app_id_env ?? base.spark_app_id_env ?? '',
+      spark_api_key: override.spark_api_key ?? base.spark_api_key ?? '',
+      spark_api_key_env: override.spark_api_key_env ?? base.spark_api_key_env ?? '',
+      spark_api_secret: override.spark_api_secret ?? base.spark_api_secret ?? '',
+      spark_api_secret_env: override.spark_api_secret_env ?? base.spark_api_secret_env ?? '',
+      dify_app_type: override.dify_app_type ?? base.dify_app_type ?? 'chat',
+      dify_user: override.dify_user ?? base.dify_user ?? 'bilibili-study-notes'
+    };
   }
 }
 

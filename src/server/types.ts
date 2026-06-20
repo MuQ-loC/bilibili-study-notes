@@ -66,6 +66,22 @@ export type FeishuTarget = {
   folder_url?: string;
 };
 
+export type AIServiceConfig = {
+  provider?: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify' | 'spark';
+  base_url?: string;
+  api_key?: string;
+  api_key_env?: string;
+  model?: string;
+  spark_app_id?: string;
+  spark_app_id_env?: string;
+  spark_api_key?: string;
+  spark_api_key_env?: string;
+  spark_api_secret?: string;
+  spark_api_secret_env?: string;
+  dify_app_type?: 'chat' | 'completion';
+  dify_user?: string;
+};
+
 export type AppConfig = {
   server: {
     host: string;
@@ -81,6 +97,11 @@ export type AppConfig = {
     api_key?: string;
     api_key_env?: string;
     model: string;
+    correction_model?: string;
+    title_model?: string;
+    summary?: AIServiceConfig;
+    correction?: AIServiceConfig;
+    title?: AIServiceConfig;
     spark_app_id?: string;
     spark_app_id_env?: string;
     spark_api_key?: string;

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { MemoryStore } from './store.js';
-import type { AppConfig, CourseLesson, Note, Transcript, Video } from './types.js';
+import type { AIServiceConfig, AppConfig, CourseLesson, Note, Transcript, Video } from './types.js';
 import { AIProvider } from './providers/ai.js';
 import { ASRProvider } from './providers/asr.js';
 import { BilibiliClient, extractBvid } from './providers/bilibili.js';
@@ -526,7 +526,10 @@ function publicConfig() {
       api_key_configured: Boolean(cfg.ai.api_key),
       spark_app_id_configured: Boolean(cfg.ai.spark_app_id),
       spark_api_key_configured: Boolean(cfg.ai.spark_api_key),
-      spark_api_secret_configured: Boolean(cfg.ai.spark_api_secret)
+      spark_api_secret_configured: Boolean(cfg.ai.spark_api_secret),
+      summary: publicAIProfile(cfg.ai.summary, cfg.ai),
+      correction: publicAIProfile(cfg.ai.correction, cfg.ai),
+      title: publicAIProfile(cfg.ai.title, cfg.ai)
     },
     asr: {
       provider: cfg.asr.provider,
@@ -539,6 +542,19 @@ function publicConfig() {
       spark_app_id_configured: Boolean(cfg.asr.spark_app_id),
       spark_api_secret_configured: Boolean(cfg.asr.spark_api_secret)
     }
+  };
+}
+
+function publicAIProfile(profile: AIServiceConfig | undefined, fallback: AppConfig['ai']) {
+  const merged = mergeAIProfile(profile, fallback);
+  return {
+    provider: merged.provider,
+    base_url: merged.base_url || '',
+    model: merged.model || '',
+    api_key_configured: Boolean(merged.api_key),
+    spark_app_id_configured: Boolean(merged.spark_app_id),
+    spark_api_key_configured: Boolean(merged.spark_api_key),
+    spark_api_secret_configured: Boolean(merged.spark_api_secret)
   };
 }
 
@@ -557,6 +573,9 @@ function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): 
   assignSecret(next.ai, 'spark_app_id', aiPatch.spark_app_id);
   assignSecret(next.ai, 'spark_api_key', aiPatch.spark_api_key);
   assignSecret(next.ai, 'spark_api_secret', aiPatch.spark_api_secret);
+  next.ai.summary = mergeAIProfilePatch(next.ai.summary, next.ai, isRecord(aiPatch.summary) ? aiPatch.summary : undefined);
+  next.ai.correction = mergeAIProfilePatch(next.ai.correction, next.ai, isRecord(aiPatch.correction) ? aiPatch.correction : undefined);
+  next.ai.title = mergeAIProfilePatch(next.ai.title, next.ai, isRecord(aiPatch.title) ? aiPatch.title : undefined);
 
   const asrProvider = stringValue(asrPatch.provider);
   if (asrProvider && ['none', 'openai', 'local', 'spark'].includes(asrProvider)) {
@@ -570,6 +589,43 @@ function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): 
   assignSecret(next.asr, 'openai_api_key', asrPatch.openai_api_key);
   assignSecret(next.asr, 'spark_app_id', asrPatch.spark_app_id);
   assignSecret(next.asr, 'spark_api_secret', asrPatch.spark_api_secret);
+  return next;
+}
+
+function mergeAIProfile(profile: AIServiceConfig | undefined, fallback: AppConfig['ai']): AIServiceConfig {
+  return {
+    provider: profile?.provider || fallback.provider,
+    base_url: profile?.base_url ?? fallback.base_url,
+    api_key: profile?.api_key ?? fallback.api_key,
+    api_key_env: profile?.api_key_env ?? fallback.api_key_env,
+    model: profile?.model || fallback.model,
+    spark_app_id: profile?.spark_app_id ?? fallback.spark_app_id,
+    spark_app_id_env: profile?.spark_app_id_env ?? fallback.spark_app_id_env,
+    spark_api_key: profile?.spark_api_key ?? fallback.spark_api_key,
+    spark_api_key_env: profile?.spark_api_key_env ?? fallback.spark_api_key_env,
+    spark_api_secret: profile?.spark_api_secret ?? fallback.spark_api_secret,
+    spark_api_secret_env: profile?.spark_api_secret_env ?? fallback.spark_api_secret_env,
+    dify_app_type: profile?.dify_app_type ?? fallback.dify_app_type,
+    dify_user: profile?.dify_user ?? fallback.dify_user
+  };
+}
+
+function mergeAIProfilePatch(current: AIServiceConfig | undefined, fallback: AppConfig['ai'], patch?: Record<string, unknown>): AIServiceConfig {
+  const next = mergeAIProfile(current, fallback);
+  if (!patch) return next;
+  const provider = stringValue(patch.provider);
+  if (provider && ['openai_compatible', 'deepseek', 'ollama', 'dify', 'spark'].includes(provider)) {
+    next.provider = provider as AIServiceConfig['provider'];
+  }
+  assignString(next, 'base_url', patch.base_url);
+  assignString(next, 'model', patch.model);
+  assignSecret(next, 'api_key', patch.api_key);
+  assignSecret(next, 'spark_app_id', patch.spark_app_id);
+  assignSecret(next, 'spark_api_key', patch.spark_api_key);
+  assignSecret(next, 'spark_api_secret', patch.spark_api_secret);
+  assignString(next, 'dify_user', patch.dify_user);
+  const difyAppType = stringValue(patch.dify_app_type);
+  if (difyAppType === 'chat' || difyAppType === 'completion') next.dify_app_type = difyAppType;
   return next;
 }
 
