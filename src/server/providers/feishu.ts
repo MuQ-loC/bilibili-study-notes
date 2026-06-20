@@ -17,8 +17,15 @@ export class FeishuProvider {
       this.cfg.document_id ||
       note.feishu_document_id ||
       (await this.createDocument(token, note.title, normalized.folder_token || this.cfg.folder_token || ''));
-    await this.appendBlocks(token, documentId, markdownToBlocks(note.markdown));
-    return documentId;
+    try {
+      await this.appendBlocks(token, documentId, markdownToBlocks(note.markdown));
+      return documentId;
+    } catch (error) {
+      if (!isResourceDeletedError(error) || normalized.document_id || this.cfg.document_id) throw error;
+      const freshDocumentId = await this.createDocument(token, note.title, normalized.folder_token || this.cfg.folder_token || '');
+      await this.appendBlocks(token, freshDocumentId, markdownToBlocks(note.markdown));
+      return freshDocumentId;
+    }
   }
 
   private async tenantToken(): Promise<string> {
@@ -271,4 +278,9 @@ async function postJson<T>(url: string, token: string, body: unknown): Promise<T
   const text = await res.text();
   if (!res.ok) throw new Error(`飞书 HTTP ${res.status}: ${text}`);
   return JSON.parse(text) as T;
+}
+
+function isResourceDeletedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('1770003') || /resource deleted/i.test(message);
 }
