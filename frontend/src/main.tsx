@@ -133,14 +133,18 @@ type RuntimeConfig = {
     spark_api_secret_configured?: boolean;
   };
   asr: {
-    provider: 'none' | 'openai' | 'local';
+    provider: 'none' | 'openai' | 'local' | 'spark';
     model: string;
     device: string;
     work_dir: string;
     python_path: string;
     openai_base_url: string;
     openai_api_key?: string;
+    spark_app_id?: string;
+    spark_api_secret?: string;
     openai_api_key_configured?: boolean;
+    spark_app_id_configured?: boolean;
+    spark_api_secret_configured?: boolean;
   };
 };
 
@@ -397,7 +401,7 @@ function App() {
       const draft = {
         ...res,
         ai: { ...res.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
-        asr: { ...res.asr, openai_api_key: '' }
+        asr: { ...res.asr, openai_api_key: '', spark_app_id: '', spark_api_secret: '' }
       };
       setRuntimeConfig(res);
       setConfigDraft(draft);
@@ -429,7 +433,7 @@ function App() {
       const draft = {
         ...saved,
         ai: { ...saved.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
-        asr: { ...saved.asr, openai_api_key: '' }
+        asr: { ...saved.asr, openai_api_key: '', spark_app_id: '', spark_api_secret: '' }
       };
       setRuntimeConfig(saved);
       setConfigDraft(draft);
@@ -591,9 +595,20 @@ function App() {
     await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/download-audio/stream', {}, 'Audio download finished');
   }
 
-  async function transcribeActiveLesson() {
+  async function transcribeActiveLesson(correct = true) {
     if (!activeLesson) return;
-    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/transcribe/stream', { correct: true }, 'Transcription and correction finished');
+    await streamLessonAction(
+      '/api/course-lessons/' + activeLesson.id + '/transcribe/stream',
+      { correct },
+      correct ? 'Transcription and correction finished' : 'Transcription finished'
+    );
+  }
+
+  async function correctActiveLesson() {
+    if (!activeLesson) return;
+    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/correct/stream', {
+      transcript: lessonTranscriptDraft
+    }, 'Transcript correction finished');
   }
 
   async function summarizeActiveLesson() {
@@ -1607,8 +1622,14 @@ function App() {
                   <Button icon={<DownloadOutlined />} loading={lessonBusy} onClick={downloadActiveLessonAudio}>
                     {'\u4e0b\u8f7d\u97f3\u9891'}
                   </Button>
-                  <Button icon={<AudioOutlined />} loading={lessonBusy} onClick={transcribeActiveLesson}>
-                    {'\u8f6c\u5199\u5e76\u4f18\u5316'}
+                  <Button icon={<AudioOutlined />} loading={lessonBusy} onClick={() => transcribeActiveLesson(false)}>
+                    {'\u53ea\u8f6c\u5199'}
+                  </Button>
+                  <Button icon={<RobotOutlined />} loading={lessonBusy} disabled={!lessonTranscriptDraft.trim()} onClick={correctActiveLesson}>
+                    {'\u53ea\u6821\u6b63'}
+                  </Button>
+                  <Button icon={<AudioOutlined />} loading={lessonBusy} onClick={() => transcribeActiveLesson(true)}>
+                    {'\u8f6c\u5199\u5e76\u6821\u6b63'}
                   </Button>
                   <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={runActiveLesson}>
                     {'\u4e00\u952e\u8dd1\u672c\u8bfe'}
@@ -1751,6 +1772,7 @@ function App() {
                       onChange={(value) => patchConfig('asr', 'provider', value)}
                       options={[
                         { value: 'local', label: '\u672c\u5730 faster-whisper' },
+                        { value: 'spark', label: '\u8baf\u98de\u8bed\u97f3\u8f6c\u5199' },
                         { value: 'openai', label: '\u4e91\u7aef OpenAI \u517c\u5bb9 ASR' },
                         { value: 'none', label: '\u5173\u95ed\u8f6c\u5199' }
                       ]}
@@ -1790,8 +1812,14 @@ function App() {
               </Card>
             </Col>
             <Col xs={24} xl={12}>
-              <Card title={'\u56db\u3001\u4e91\u7aef ASR \u8ba4\u8bc1'} extra={<Tag color={configDraft.asr.provider === 'openai' ? 'green' : 'default'}>{configDraft.asr.provider === 'openai' ? '\u5f53\u524d\u4f7f\u7528' : '\u53ef\u9009'}</Tag>}>
+              <Card title={'\u56db\u3001\u8f6c\u5199\u63a5\u53e3\u8ba4\u8bc1'} extra={<Tag color={configDraft.asr.provider === 'openai' || configDraft.asr.provider === 'spark' ? 'green' : 'default'}>{configDraft.asr.provider === 'openai' || configDraft.asr.provider === 'spark' ? '\u5f53\u524d\u4f7f\u7528' : '\u53ef\u9009'}</Tag>}>
                 <Form layout="vertical">
+                  <Form.Item label={'\u8baf\u98de ASR APPID' + (runtimeConfig?.asr.spark_app_id_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.asr.spark_app_id || ''} onChange={(event) => patchConfig('asr', 'spark_app_id', event.target.value)} placeholder="Leave blank to keep current APPID" />
+                  </Form.Item>
+                  <Form.Item label={'\u8baf\u98de ASR APISecret' + (runtimeConfig?.asr.spark_api_secret_configured ? '\uff08\u5df2\u914d\u7f6e\uff09' : '')}>
+                    <Input.Password value={configDraft.asr.spark_api_secret || ''} onChange={(event) => patchConfig('asr', 'spark_api_secret', event.target.value)} placeholder="Leave blank to keep current APISecret" />
+                  </Form.Item>
                   <Form.Item label={'\u4e91\u7aef ASR \u63a5\u53e3\u5730\u5740'}>
                     <Input value={configDraft.asr.openai_base_url} onChange={(event) => patchConfig('asr', 'openai_base_url', event.target.value)} placeholder="https://api.openai.com/v1" />
                   </Form.Item>

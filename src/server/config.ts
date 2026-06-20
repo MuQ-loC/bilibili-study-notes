@@ -7,9 +7,9 @@ const defaultConfig: AppConfig = {
   bilibili: { cookie_env: 'BILIBILI_COOKIE' },
   ai: {
     provider: 'openai_compatible',
-    base_url: 'https://api.deepseek.com',
-    api_key_env: 'DEEPSEEK_API_KEY',
-    model: 'deepseek-chat',
+    base_url: 'https://api.shqbb.com/v1',
+    api_key_env: 'NEWAPI_API_KEY',
+    model: 'gpt-5.5',
     spark_app_id_env: 'SPARK_APP_ID',
     spark_api_key_env: 'SPARK_API_KEY',
     spark_api_secret_env: 'SPARK_API_SECRET',
@@ -17,10 +17,12 @@ const defaultConfig: AppConfig = {
     dify_user: 'bilibili-study-notes'
   },
   asr: {
-    provider: 'local',
+    provider: 'spark',
     openai_base_url: 'https://api.openai.com/v1',
     openai_api_key_env: 'OPENAI_API_KEY',
-    model: 'D:\\Ev\\BiliSummaryASR\\models\\faster-whisper-small',
+    spark_app_id_env: 'SPARK_APP_ID',
+    spark_api_secret_env: 'SPARK_API_SECRET',
+    model: 'lfasr',
     work_dir: 'notes/asr',
     python_path: 'D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe',
     python_path_env: 'LOCAL_ASR_PYTHON',
@@ -68,6 +70,10 @@ export function loadConfig(file = 'config.json'): AppConfig {
   if (env('LOCAL_ASR_PYTHON')) cfg.asr.python_path = env('LOCAL_ASR_PYTHON');
   if (env('OPENAI_BASE_URL')) cfg.asr.openai_base_url = env('OPENAI_BASE_URL');
   cfg.asr.openai_api_key ||= cfg.asr.openai_api_key_env ? env(cfg.asr.openai_api_key_env) : '';
+  cfg.asr.spark_app_id ||= cfg.asr.spark_app_id_env ? env(cfg.asr.spark_app_id_env) : '';
+  cfg.asr.spark_api_secret ||= cfg.asr.spark_api_secret_env ? env(cfg.asr.spark_api_secret_env) : '';
+  cfg.asr.spark_app_id ||= cfg.ai.spark_app_id;
+  cfg.asr.spark_api_secret ||= cfg.ai.spark_api_secret;
 
   if (cfg.feishu.enabled_env && env(cfg.feishu.enabled_env)) {
     cfg.feishu.enabled = ['1', 'true', 'yes', 'on'].includes(env(cfg.feishu.enabled_env).toLowerCase());

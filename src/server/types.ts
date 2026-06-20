@@ -91,10 +91,14 @@ export type AppConfig = {
     dify_user?: string;
   };
   asr: {
-    provider: 'none' | 'openai' | 'local';
+    provider: 'none' | 'openai' | 'local' | 'spark';
     openai_base_url: string;
     openai_api_key?: string;
     openai_api_key_env?: string;
+    spark_app_id?: string;
+    spark_app_id_env?: string;
+    spark_api_secret?: string;
+    spark_api_secret_env?: string;
     model: string;
     work_dir: string;
     python_path?: string;

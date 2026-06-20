@@ -257,6 +257,22 @@ app.post('/api/course-lessons/:id/transcribe/stream', asyncHandler(async (req, r
   });
 }));
 
+app.post('/api/course-lessons/:id/correct/stream', asyncHandler(async (req, res) => {
+  const initial = store.getCourseLesson(String(req.params.id));
+  sse(res, async (send) => {
+    const lesson = await ensureLessonVideo(initial, send);
+    const text = String(req.body.transcript || lesson.transcript?.content || lesson.corrected_transcript?.content || '');
+    if (!text.trim()) throw new Error('lesson has no transcript to correct');
+    send('status', { message: 'Correcting transcript with AI...' });
+    await store.updateCourseLesson(lesson.id, { status: 'correcting', error: '' });
+    const correctedText = await ai.correctTranscript(lesson.video!, text);
+    const corrected = await store.saveTranscript(lesson.video!.id, { source: 'ai_corrected', language: 'zh-CN', content: correctedText });
+    send('progress', { message: 'AI correction finished, transcript length: ' + corrected.content.length });
+    const updated = await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing', error: '' });
+    send('done', { lesson: updated, message: 'Transcript correction finished' });
+  });
+}));
+
 app.post('/api/course-lessons/:id/summarize', asyncHandler(async (req, res) => {
   const lesson = await ensureLessonVideo(store.getCourseLesson(String(req.params.id)));
   const text = String(req.body.transcript || lesson.corrected_transcript?.content || lesson.transcript?.content || '');
@@ -519,7 +535,9 @@ function publicConfig() {
       work_dir: cfg.asr.work_dir || '',
       python_path: cfg.asr.python_path || '',
       openai_base_url: cfg.asr.openai_base_url || '',
-      openai_api_key_configured: Boolean(cfg.asr.openai_api_key)
+      openai_api_key_configured: Boolean(cfg.asr.openai_api_key),
+      spark_app_id_configured: Boolean(cfg.asr.spark_app_id),
+      spark_api_secret_configured: Boolean(cfg.asr.spark_api_secret)
     }
   };
 }
@@ -541,7 +559,7 @@ function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): 
   assignSecret(next.ai, 'spark_api_secret', aiPatch.spark_api_secret);
 
   const asrProvider = stringValue(asrPatch.provider);
-  if (asrProvider && ['none', 'openai', 'local'].includes(asrProvider)) {
+  if (asrProvider && ['none', 'openai', 'local', 'spark'].includes(asrProvider)) {
     next.asr.provider = asrProvider as AppConfig['asr']['provider'];
   }
   assignString(next.asr, 'model', asrPatch.model);
@@ -550,6 +568,8 @@ function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): 
   assignString(next.asr, 'python_path', asrPatch.python_path);
   assignString(next.asr, 'openai_base_url', asrPatch.openai_base_url);
   assignSecret(next.asr, 'openai_api_key', asrPatch.openai_api_key);
+  assignSecret(next.asr, 'spark_app_id', asrPatch.spark_app_id);
+  assignSecret(next.asr, 'spark_api_secret', asrPatch.spark_api_secret);
   return next;
 }
 
