@@ -60,12 +60,15 @@ export type AppConfig = {
     dify_user?: string;
   };
   asr: {
-    provider: 'none' | 'openai';
+    provider: 'none' | 'openai' | 'local';
     openai_base_url: string;
     openai_api_key?: string;
     openai_api_key_env?: string;
     model: string;
     work_dir: string;
+    python_path?: string;
+    python_path_env?: string;
+    device?: string;
   };
   feishu: {
     enabled: boolean;

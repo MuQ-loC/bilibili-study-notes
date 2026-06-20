@@ -8,8 +8,9 @@ export class ASRProvider {
 
   async transcribe(video: Video, onProgress?: (message: string) => void): Promise<Transcript> {
     if (this.cfg.provider === 'none') {
-      throw new Error('ASR 未启用。请配置 asr.provider=openai，或使用 B站公开字幕。');
+      throw new Error('ASR 未启用。请配置 ASR_PROVIDER=local/openai，或使用 B站公开字幕。');
     }
+    if (this.cfg.provider === 'local') return this.transcribeLocal(video, onProgress);
     if (this.cfg.provider !== 'openai') {
       throw new Error(`暂不支持 ASR provider: ${this.cfg.provider}`);
     }
@@ -20,6 +21,27 @@ export class ASRProvider {
     onProgress?.('正在上传到 OpenAI Transcription API...');
     const text = await transcribeOpenAI(audioPath, this.cfg);
     return { source: `openai_asr/${this.cfg.model}`, language: 'zh-CN', content: text };
+  }
+
+  private async transcribeLocal(video: Video, onProgress?: (message: string) => void): Promise<Transcript> {
+    const pythonPath = this.cfg.python_path?.trim() || 'python';
+    const scriptPath = path.join('tools', 'transcribe_bilibili.py');
+    const workDir = path.join(this.cfg.work_dir, `${video.bvid}-${video.cid || video.id}`);
+    await fs.mkdir(workDir, { recursive: true });
+    const args = [
+      scriptPath,
+      '--url',
+      video.url,
+      '--work-dir',
+      workDir,
+      '--model',
+      this.cfg.model || 'small',
+      '--device',
+      this.cfg.device || 'auto'
+    ];
+    const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+    const content = await runJSONLines(pythonPath, args, env, onProgress);
+    return { source: `local_asr/${path.basename(this.cfg.model || 'small')}`, language: 'zh-CN', content };
   }
 }
 
@@ -67,6 +89,51 @@ function run(command: string, args: string[]): Promise<void> {
     child.on('close', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`${command} exited with ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+function runJSONLines(command: string, args: string[], env: NodeJS.ProcessEnv, onProgress?: (message: string) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+    let stderr = '';
+    let stdout = '';
+    let finalContent = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+      const lines = stdout.split(/\r?\n/);
+      stdout = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const event = JSON.parse(trimmed) as { event?: string; message?: string; content?: string };
+          if (event.event === 'done') finalContent = event.content || '';
+          else if (event.event === 'error') {
+            child.kill();
+            reject(new Error(event.message || '本地 ASR 失败'));
+          } else if (event.message) {
+            onProgress?.(event.message);
+          }
+        } catch {
+          onProgress?.(trimmed);
+        }
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`本地 ASR exited with ${code}: ${stderr.trim()}`));
+        return;
+      }
+      if (!finalContent.trim()) {
+        reject(new Error(stderr.trim() || '本地 ASR 没有生成文本'));
+        return;
+      }
+      resolve(finalContent.trim());
     });
   });
 }

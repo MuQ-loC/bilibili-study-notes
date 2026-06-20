@@ -14,11 +14,14 @@ const defaultConfig: AppConfig = {
     dify_user: 'bilibili-study-notes'
   },
   asr: {
-    provider: 'none',
+    provider: 'local',
     openai_base_url: 'https://api.openai.com/v1',
     openai_api_key_env: 'OPENAI_API_KEY',
-    model: 'whisper-1',
-    work_dir: 'notes/asr'
+    model: 'D:\\Ev\\BiliSummaryASR\\models\\faster-whisper-small',
+    work_dir: 'notes/asr',
+    python_path: 'D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe',
+    python_path_env: 'LOCAL_ASR_PYTHON',
+    device: 'auto'
   },
   feishu: {
     enabled: false,
@@ -52,6 +55,10 @@ export function loadConfig(file = 'config.json'): AppConfig {
   cfg.ai.api_key ||= cfg.ai.api_key_env ? env(cfg.ai.api_key_env) : '';
   if (env('ASR_PROVIDER')) cfg.asr.provider = env('ASR_PROVIDER') as AppConfig['asr']['provider'];
   if (env('ASR_MODEL')) cfg.asr.model = env('ASR_MODEL');
+  if (env('LOCAL_ASR_MODEL')) cfg.asr.model = env('LOCAL_ASR_MODEL');
+  if (env('LOCAL_ASR_DEVICE')) cfg.asr.device = env('LOCAL_ASR_DEVICE');
+  cfg.asr.python_path ||= cfg.asr.python_path_env ? env(cfg.asr.python_path_env) : '';
+  if (env('LOCAL_ASR_PYTHON')) cfg.asr.python_path = env('LOCAL_ASR_PYTHON');
   if (env('OPENAI_BASE_URL')) cfg.asr.openai_base_url = env('OPENAI_BASE_URL');
   cfg.asr.openai_api_key ||= cfg.asr.openai_api_key_env ? env(cfg.asr.openai_api_key_env) : '';
 

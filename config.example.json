@@ -15,11 +15,14 @@
     "dify_user": "bilibili-study-notes"
   },
   "asr": {
-    "provider": "none",
+    "provider": "local",
     "openai_base_url": "https://api.openai.com/v1",
     "openai_api_key_env": "OPENAI_API_KEY",
-    "model": "whisper-1",
-    "work_dir": "notes/asr"
+    "model": "D:\\Ev\\BiliSummaryASR\\models\\faster-whisper-small",
+    "work_dir": "notes/asr",
+    "python_path": "D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe",
+    "python_path_env": "LOCAL_ASR_PYTHON",
+    "device": "auto"
   },
   "feishu": {
     "enabled": false,

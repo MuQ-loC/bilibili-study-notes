@@ -8,7 +8,7 @@
 
 - 解析 B站视频链接、短链和 BV 号。
 - 优先读取 B站公开字幕。
-- 可选 ASR 兜底转写无字幕视频。
+- 本地 faster-whisper / OpenAI ASR 兜底转写无字幕视频。
 - AI 字幕校正、学习笔记总结、10 字以内短标题。
 - 单视频工作台：播放、字幕、总结、截图、飞书同步。
 - 合集/专辑批量总结：并发处理、自动加序号标题。
@@ -86,6 +86,9 @@ OPENAI_API_KEY
 ASR_PROVIDER
 ASR_MODEL
 OPENAI_BASE_URL
+LOCAL_ASR_PYTHON
+LOCAL_ASR_MODEL
+LOCAL_ASR_DEVICE
 DIFY_API_KEY
 FEISHU_ENABLED
 FEISHU_APP_ID
