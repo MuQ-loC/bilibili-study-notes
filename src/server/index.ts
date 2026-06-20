@@ -208,6 +208,26 @@ app.post('/api/course-lessons/:id/note', asyncHandler(async (req, res) => {
   res.json(await store.attachLessonNote(lesson.id, note));
 }));
 
+app.post('/api/course-lessons/:id/feishu', asyncHandler(async (req, res) => {
+  const lesson = store.getCourseLesson(String(req.params.id));
+  if (!lesson.video) throw new Error('lesson has no video info');
+  const markdown = String(req.body.markdown || lesson.summary?.markdown || lesson.note?.markdown || '');
+  if (!markdown.trim()) throw new Error('lesson has no note markdown');
+  const note = lesson.note || await store.saveNote(lesson.video, String(req.body.title || lesson.video.title), markdown);
+  if (!lesson.note) await store.attachLessonNote(lesson.id, note);
+  note.title = String(req.body.title || note.title || lesson.video.title);
+  note.markdown = markdown;
+  const documentId = await feishu.sync(note, {
+    document_id: req.body.document_id,
+    document_url: req.body.document_url,
+    folder_token: req.body.folder_token,
+    folder_url: req.body.folder_url
+  });
+  note.feishu_document_id = documentId;
+  await store.updateNote(note);
+  res.json(await store.attachLessonNote(lesson.id, note));
+}));
+
 app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
   const url = String(req.body.url || '').trim();
   if (!url) throw new Error('url is required');

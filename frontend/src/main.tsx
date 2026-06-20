@@ -479,6 +479,28 @@ function App() {
     }
   }
 
+  async function syncActiveLessonFeishu() {
+    if (!activeLesson) return;
+    setLessonBusy(true);
+    setCourseStatus('正在保存到飞书文件夹...');
+    try {
+      const updated = await api<CourseLesson>(
+        `/api/course-lessons/${activeLesson.id}/feishu`,
+        {
+          ...buildFeishuSyncBody(activeLesson.note?.id || '', feishuTarget),
+          title: activeLesson.video?.title || `课时${activeLesson.index}`,
+          markdown: lessonSummaryDraft
+        }
+      );
+      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+      setCourseStatus(`已保存到飞书：${updated.note?.feishu_document_id || '完成'}`);
+    } catch (err) {
+      setCourseStatus(`飞书保存失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
   async function previewVoice(voiceType = selectedVoiceType) {
     if (!voiceType) {
       setTtsMessage('请先选择一个音色');
@@ -1385,6 +1407,12 @@ function App() {
               <Button size="small" icon={<ReloadOutlined />} onClick={loadCourses}>刷新</Button>
               <Button size="small" icon={<FolderOpenOutlined />} loading={lessonBusy} onClick={recoverAsrCache}>恢复缓存</Button>
             </Space>
+            <Input
+              className="topGap"
+              value={feishuTarget}
+              onChange={(event) => setFeishuTarget(event.target.value)}
+              placeholder="飞书文件夹或文档链接"
+            />
             <Alert className="compactAlert topGap" type={courseStatus.startsWith('失败') || courseStatus.includes('失败') ? 'error' : 'info'} showIcon message={courseStatus} />
           </Card>
 
@@ -1436,6 +1464,9 @@ function App() {
                   </Button>
                   <Button icon={<FileTextOutlined />} loading={lessonBusy} onClick={saveActiveLessonNote}>
                     保存笔记
+                  </Button>
+                  <Button icon={<CloudUploadOutlined />} loading={lessonBusy} disabled={!lessonSummaryDraft.trim()} onClick={syncActiveLessonFeishu}>
+                    存飞书
                   </Button>
                 </Space>
               }
