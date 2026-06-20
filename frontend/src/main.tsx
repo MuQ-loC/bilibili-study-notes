@@ -430,12 +430,12 @@ function App() {
   async function transcribeActiveLesson() {
     if (!activeLesson) return;
     setLessonBusy(true);
-    setCourseStatus('正在用本地音频缓存继续转写...');
+    setCourseStatus('正在用本地音频缓存继续转写，并在转写后自动校正...');
     try {
-      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/transcribe`, {});
+      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/transcribe`, { correct: true });
       setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
-      setLessonTranscriptDraft(updated.transcript?.content || '');
-      setCourseStatus('课时转写完成，可以继续校正/总结');
+      setLessonTranscriptDraft(updated.corrected_transcript?.content || updated.transcript?.content || '');
+      setCourseStatus('课时转写和校正完成，可以继续总结');
     } catch (err) {
       setCourseStatus(`转写失败：${(err as Error).message}`);
     } finally {
@@ -1429,7 +1429,7 @@ function App() {
                     保存修改
                   </Button>
                   <Button icon={<AudioOutlined />} loading={lessonBusy} disabled={!activeLesson.audio_path} onClick={transcribeActiveLesson}>
-                    继续转写
+                    转写并优化
                   </Button>
                   <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={summarizeActiveLesson}>
                     继续总结

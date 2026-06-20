@@ -177,7 +177,15 @@ app.post('/api/course-lessons/:id/transcribe', asyncHandler(async (req, res) => 
   await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
   const transcript = await asr.transcribeAudio(lesson.video, audioPath);
   await store.saveTranscript(lesson.video.id, transcript);
-  res.json(await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' }));
+  const shouldCorrect = req.body.correct !== false;
+  if (!shouldCorrect) {
+    res.json(await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' }));
+    return;
+  }
+  await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
+  const correctedText = await ai.correctTranscript(lesson.video, transcript.content);
+  const corrected = await store.saveTranscript(lesson.video.id, { source: 'ai_corrected', language: 'zh-CN', content: correctedText });
+  res.json(await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing', error: '' }));
 }));
 
 app.post('/api/course-lessons/:id/summarize', asyncHandler(async (req, res) => {
