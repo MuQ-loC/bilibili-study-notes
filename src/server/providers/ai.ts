@@ -1,6 +1,11 @@
+import crypto from 'node:crypto';
 import type { AppConfig, Summary, Video } from '../types.js';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+type SparkResponse = {
+  header?: { code?: number; message?: string; status?: number };
+  payload?: { choices?: { status?: number; text?: Array<{ content?: string }> } };
+};
 
 export class AIProvider {
   constructor(private cfg: AppConfig['ai']) {}
@@ -27,6 +32,7 @@ export class AIProvider {
 
   private async complete(messages: ChatMessage[]): Promise<string> {
     if (this.cfg.provider === 'dify') return this.completeDify(messages.at(-1)?.content || '');
+    if (this.cfg.provider === 'spark') return this.completeSpark(messages);
     return this.completeOpenAICompatible(messages);
   }
 
@@ -73,9 +79,145 @@ export class AIProvider {
     return data.answer;
   }
 
+  private completeSpark(messages: ChatMessage[]): Promise<string> {
+    const appId = this.cfg.spark_app_id || '';
+    const apiKey = this.cfg.spark_api_key || '';
+    const apiSecret = this.cfg.spark_api_secret || '';
+    if (!appId || !apiKey || !apiSecret) throw new Error('Spark APPID/APIKey/APISecret is not configured');
+    const model = this.cfg.model || 'generalv3.5';
+    const url = this.signedSparkUrl(this.sparkEndpoint(model), apiKey, apiSecret);
+    const domain = this.sparkDomain(model);
+    const WebSocketImpl = globalThis.WebSocket;
+    if (!WebSocketImpl) throw new Error('WebSocket is not available in this Node.js runtime');
+
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocketImpl(url);
+      let content = '';
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          socket.close();
+          reject(new Error('Spark API timeout'));
+        }
+      }, 120000);
+
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({
+          header: { app_id: appId, uid: 'bilibili-study-notes' },
+          parameter: {
+            chat: {
+              domain,
+              temperature: 0.15,
+              max_tokens: 8192
+            }
+          },
+          payload: {
+            message: {
+              text: normalizeSparkMessages(messages)
+            }
+          }
+        }));
+      });
+
+      socket.addEventListener('message', (event) => {
+        try {
+          const data = JSON.parse(String(event.data)) as SparkResponse;
+          const code = data.header?.code ?? 0;
+          if (code !== 0) {
+            throw new Error(`Spark API ${code}: ${data.header?.message || 'request failed'}`);
+          }
+          for (const item of data.payload?.choices?.text || []) content += item.content || '';
+          if (data.header?.status === 2 || data.payload?.choices?.status === 2) {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timeout);
+              socket.close();
+              const out = content.trim();
+              out ? resolve(out) : reject(new Error('Spark API returned empty content'));
+            }
+          }
+        } catch (err) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            socket.close();
+            reject(err);
+          }
+        }
+      });
+
+      socket.addEventListener('error', () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error('Spark WebSocket connection failed'));
+        }
+      });
+
+      socket.addEventListener('close', () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          content.trim() ? resolve(content.trim()) : reject(new Error('Spark WebSocket closed before returning content'));
+        }
+      });
+    });
+  }
+
+  private signedSparkUrl(endpoint: string, apiKey: string, apiSecret: string): string {
+    const parsed = new URL(endpoint);
+    const host = parsed.host;
+    const path = parsed.pathname;
+    const date = new Date().toUTCString();
+    const signatureOrigin = `host: ${host}\ndate: ${date}\nGET ${path} HTTP/1.1`;
+    const signature = crypto.createHmac('sha256', apiSecret).update(signatureOrigin).digest('base64');
+    const authorizationOrigin = `api_key="${apiKey}", algorithm="hmac-sha256", headers="host date request-line", signature="${signature}"`;
+    parsed.searchParams.set('authorization', Buffer.from(authorizationOrigin).toString('base64'));
+    parsed.searchParams.set('date', date);
+    parsed.searchParams.set('host', host);
+    return parsed.toString();
+  }
+
+  private sparkEndpoint(model: string): string {
+    if (this.cfg.base_url?.startsWith('ws')) return this.cfg.base_url;
+    const normalized = model.toLowerCase();
+    if (normalized.includes('4.0') || normalized.includes('ultra')) return 'wss://spark-api.xf-yun.com/v4.0/chat';
+    if (normalized.includes('3.5') || normalized.includes('max')) return 'wss://spark-api.xf-yun.com/v3.5/chat';
+    if (normalized.includes('3.1') || normalized.includes('pro')) return 'wss://spark-api.xf-yun.com/v3.1/chat';
+    return 'wss://spark-api.xf-yun.com/v1.1/chat';
+  }
+
+  private sparkDomain(model: string): string {
+    const normalized = model.toLowerCase();
+    if (normalized.includes('4.0') || normalized.includes('ultra')) return '4.0Ultra';
+    if (normalized.includes('3.5') || normalized.includes('max')) return 'generalv3.5';
+    if (normalized.includes('3.1') || normalized.includes('pro')) return 'generalv3';
+    return 'general';
+  }
+
   private modelName(): string {
     return this.cfg.provider === 'dify' ? `dify/${this.cfg.dify_app_type || 'chat'}` : this.cfg.model;
   }
+}
+
+function normalizeSparkMessages(messages: ChatMessage[]): ChatMessage[] {
+  const normalized: ChatMessage[] = [];
+  let system = '';
+  for (const message of messages) {
+    if (message.role === 'system') {
+      system += (system ? '\n' : '') + message.content;
+      continue;
+    }
+    if (system) {
+      normalized.push({ role: 'user', content: `系统要求：\n${system}\n\n用户任务：\n${message.content}` });
+      system = '';
+    } else {
+      normalized.push(message);
+    }
+  }
+  if (system) normalized.push({ role: 'user', content: system });
+  return normalized;
 }
 
 function buildSummaryMessages(video: Video, transcript: string, instruction: string): ChatMessage[] {

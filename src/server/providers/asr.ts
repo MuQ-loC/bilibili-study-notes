@@ -30,6 +30,23 @@ export class ASRProvider {
     return this.transcribeLocal(video, onProgress, audioPath);
   }
 
+  async downloadAudio(video: Video, onProgress?: (message: string) => void): Promise<string> {
+    if (this.cfg.provider === 'none') {
+      throw new Error('ASR is not enabled');
+    }
+    if (this.cfg.provider !== 'local') {
+      await fs.mkdir(this.cfg.work_dir, { recursive: true });
+      onProgress?.('Downloading audio with yt-dlp...');
+      return downloadAudio(video.url, this.cfg.work_dir, `${video.bvid}-${video.cid || video.id}`);
+    }
+    const pythonPath = this.cfg.python_path?.trim() || 'python';
+    const scriptPath = path.join('tools', 'transcribe_bilibili.py');
+    const workDir = path.join(this.cfg.work_dir, `${video.bvid}-${video.cid || video.id}`);
+    await fs.mkdir(workDir, { recursive: true });
+    const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+    return runJSONLines(pythonPath, [scriptPath, '--url', video.url, '--work-dir', workDir, '--download-only'], env, onProgress);
+  }
+
   private async transcribeLocal(video: Video, onProgress?: (message: string) => void, audioPath?: string): Promise<Transcript> {
     const pythonPath = this.cfg.python_path?.trim() || 'python';
     const scriptPath = path.join('tools', 'transcribe_bilibili.py');

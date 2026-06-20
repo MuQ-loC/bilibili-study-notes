@@ -76,11 +76,17 @@ export type AppConfig = {
     cookie_env: string;
   };
   ai: {
-    provider: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify';
+    provider: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify' | 'spark';
     base_url: string;
     api_key?: string;
     api_key_env?: string;
     model: string;
+    spark_app_id?: string;
+    spark_app_id_env?: string;
+    spark_api_key?: string;
+    spark_api_key_env?: string;
+    spark_api_secret?: string;
+    spark_api_secret_env?: string;
     dify_app_type?: 'chat' | 'completion';
     dify_user?: string;
   };

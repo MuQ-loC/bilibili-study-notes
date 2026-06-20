@@ -21,15 +21,17 @@ def fail(message):
     sys.exit(1)
 
 
-def import_deps():
+def import_deps(download_only=False):
     try:
         import yt_dlp
     except Exception:
-        fail("缺少 yt-dlp，请先安装本地 ASR 环境")
+        fail("yt-dlp is missing in the local ASR environment")
+    if download_only:
+        return yt_dlp, None
     try:
         from faster_whisper import WhisperModel
     except Exception:
-        fail("缺少 faster-whisper，请先安装本地 ASR 环境")
+        fail("faster-whisper is missing in the local ASR environment")
     return yt_dlp, WhisperModel
 
 
@@ -40,11 +42,11 @@ class ProgressHook:
             downloaded = data.get("downloaded_bytes") or 0
             total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
             if total:
-                emit("progress", f"正在下载音频：{downloaded * 100 / total:.1f}%")
+                emit("progress", f"Downloading audio: {downloaded * 100 / total:.1f}%")
             else:
-                emit("progress", "正在下载音频...")
+                emit("progress", "Downloading audio...")
         elif status == "finished":
-            emit("progress", "音频下载完成，准备转写...")
+            emit("progress", "Audio download finished")
 
 
 def download_audio(yt_dlp, video_url, work_dir):
@@ -72,13 +74,13 @@ def download_audio(yt_dlp, video_url, work_dir):
         "http_headers": headers,
         "progress_hooks": [ProgressHook()],
     }
-    emit("progress", "正在连接 B 站并下载音频...")
+    emit("progress", "Connecting to Bilibili and downloading audio...")
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([video_url])
 
     files = [p for p in target_dir.iterdir() if p.is_file() and not p.name.endswith(".part") and p.stat().st_size > 0]
     if not files:
-        fail("没有下载到音频；如果这是登录/付费视频，请配置 BILIBILI_COOKIE 后重试")
+        fail("No audio file was downloaded. If this video requires login, configure BILIBILI_COOKIE and retry.")
     files.sort(key=lambda p: p.stat().st_size, reverse=True)
     return files[0]
 
@@ -86,20 +88,20 @@ def download_audio(yt_dlp, video_url, work_dir):
 def load_model(WhisperModel, model_name, device):
     if device == "auto":
         try:
-            emit("progress", f"正在加载 faster-whisper 模型：{model_name} / cuda")
+            emit("progress", f"Loading faster-whisper model: {model_name} / cuda")
             return WhisperModel(model_name, device="cuda", compute_type="float16")
         except Exception as exc:
-            emit("progress", f"CUDA 加载失败，切到 CPU：{exc}")
-            emit("progress", f"正在加载 faster-whisper 模型：{model_name} / cpu")
+            emit("progress", f"CUDA failed, switching to CPU: {exc}")
+            emit("progress", f"Loading faster-whisper model: {model_name} / cpu")
             return WhisperModel(model_name, device="cpu", compute_type="int8")
-    emit("progress", f"正在加载 faster-whisper 模型：{model_name} / {device}")
+    emit("progress", f"Loading faster-whisper model: {model_name} / {device}")
     compute_type = "float16" if device == "cuda" else "int8"
     return WhisperModel(model_name, device=device, compute_type=compute_type)
 
 
 def transcribe(WhisperModel, audio_path, model_name, device):
     model = load_model(WhisperModel, model_name, device)
-    emit("progress", "开始语音转文字...")
+    emit("progress", "Starting speech-to-text...")
     segments, info = model.transcribe(
         str(audio_path),
         language="zh",
@@ -115,9 +117,9 @@ def transcribe(WhisperModel, audio_path, model_name, device):
             continue
         lines.append(f"[{seg.start:.1f}-{seg.end:.1f}] {text}")
         if duration:
-            emit("progress", f"正在转写：{seg.end / duration * 100:.1f}% / {seg.end / 60:.1f} 分钟")
+            emit("progress", f"Transcribing: {seg.end / duration * 100:.1f}% / {seg.end / 60:.1f} min")
         else:
-            emit("progress", f"正在转写到 {seg.end / 60:.1f} 分钟")
+            emit("progress", f"Transcribed to {seg.end / 60:.1f} min")
     return "\n".join(lines).strip()
 
 
@@ -129,27 +131,31 @@ def main():
     parser.add_argument("--output", default="")
     parser.add_argument("--model", default="small")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args()
 
     try:
-        yt_dlp, WhisperModel = import_deps()
+        yt_dlp, WhisperModel = import_deps(args.download_only)
         work_dir = Path(args.work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         if args.audio:
             audio_path = Path(args.audio)
             if not audio_path.exists():
-                fail(f"音频文件不存在：{audio_path}")
-            emit("progress", f"使用已下载音频：{audio_path}")
+                fail(f"Audio file does not exist: {audio_path}")
+            emit("progress", f"Using cached audio: {audio_path}")
         else:
             audio_path = download_audio(yt_dlp, args.url, work_dir)
+        if args.download_only:
+            emit("done", "Audio download finished", str(audio_path))
+            return
         content = transcribe(WhisperModel, audio_path, args.model, args.device)
         if not content:
-            fail("转写完成，但没有识别到文字")
+            fail("Transcription finished, but no text was recognized")
         if args.output:
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(content, encoding="utf-8")
-        emit("done", "转写完成", content)
+        emit("done", "Transcription finished", content)
     except SystemExit:
         raise
     except Exception as exc:

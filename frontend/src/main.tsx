@@ -4,6 +4,7 @@ import {
   AudioOutlined,
   CameraOutlined,
   CloudUploadOutlined,
+  DownloadOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   PlayCircleOutlined,
@@ -87,6 +88,7 @@ type StreamPayload = {
   report?: string;
   summary?: Summary;
   transcript?: Transcript;
+  lesson?: CourseLesson;
 };
 
 type TTSVoice = {
@@ -272,6 +274,7 @@ function App() {
   const [selectedCourseID, setSelectedCourseID] = useState('');
   const [courseLessons, setCourseLessons] = useState<CourseLesson[]>([]);
   const [activeLessonID, setActiveLessonID] = useState('');
+  const [courseLogs, setCourseLogs] = useState<string[]>([]);
   const [courseStatus, setCourseStatus] = useState('课程历史加载后，可以接着编辑、总结和保存笔记。');
   const [lessonTranscriptDraft, setLessonTranscriptDraft] = useState('');
   const [lessonSummaryDraft, setLessonSummaryDraft] = useState('');
@@ -353,6 +356,10 @@ function App() {
     setBatchLogs((items) => [...items, `${new Date().toLocaleTimeString()} ${message}`].slice(-160));
   }
 
+  function addCourseLog(message: string) {
+    setCourseLogs((items) => [...items, `${new Date().toLocaleTimeString()} ${message}`].slice(-120));
+  }
+
   async function loadCourses() {
     try {
       const res = await api<{ courses: Course[] }>('/api/courses');
@@ -427,39 +434,102 @@ function App() {
     }
   }
 
-  async function transcribeActiveLesson() {
+  function replaceCourseLesson(updated: CourseLesson) {
+    setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+    if (updated.id === activeLessonID) {
+      setLessonTranscriptDraft(updated.corrected_transcript?.content || updated.transcript?.content || '');
+      setLessonSummaryDraft(updated.summary?.markdown || '');
+    }
+  }
+
+  async function streamLessonAction(endpoint: string, body: Record<string, unknown>, doneMessage: string) {
     if (!activeLesson) return;
     setLessonBusy(true);
-    setCourseStatus('正在用本地音频缓存继续转写，并在转写后自动校正...');
+    setCourseLogs([]);
+    setCourseStatus('Lesson task started...');
+    addCourseLog('POST ' + endpoint);
     try {
-      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/transcribe`, { correct: true });
-      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
-      setLessonTranscriptDraft(updated.corrected_transcript?.content || updated.transcript?.content || '');
-      setCourseStatus('课时转写和校正完成，可以继续总结');
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || res.statusText || 'stream endpoint returned no body');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const handleMessage = (raw: string) => {
+        const parsed = parseSSEMessage(raw);
+        if (!parsed) return;
+        const { event, payload } = parsed;
+        if (event === 'status' || event === 'progress' || event === 'log') {
+          const message = payload.message || 'Working...';
+          setCourseStatus(message);
+          addCourseLog(message);
+          return;
+        }
+        if (event === 'done') {
+          if (payload.lesson) replaceCourseLesson(payload.lesson);
+          const message = payload.message || doneMessage;
+          setCourseStatus(message);
+          addCourseLog(message);
+          return;
+        }
+        if (event === 'error') {
+          throw new Error(payload.error || 'Lesson task failed');
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          if (part.trim()) handleMessage(part);
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleMessage(buffer);
     } catch (err) {
-      setCourseStatus(`转写失败：${(err as Error).message}`);
+      const message = 'Failed: ' + (err as Error).message;
+      setCourseStatus(message);
+      addCourseLog(message);
     } finally {
       setLessonBusy(false);
     }
   }
 
+  async function downloadActiveLessonAudio() {
+    if (!activeLesson) return;
+    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/download-audio/stream', {}, 'Audio download finished');
+  }
+
+  async function transcribeActiveLesson() {
+    if (!activeLesson) return;
+    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/transcribe/stream', { correct: true }, 'Transcription and correction finished');
+  }
+
   async function summarizeActiveLesson() {
     if (!activeLesson) return;
-    setLessonBusy(true);
-    setCourseStatus('正在从当前课时文本继续总结...');
-    try {
-      const updated = await api<CourseLesson>(`/api/course-lessons/${activeLesson.id}/summarize`, {
-        transcript: lessonTranscriptDraft,
-        instruction
-      });
-      setCourseLessons((items) => items.map((item) => (item.id === updated.id ? updated : item)));
-      setLessonSummaryDraft(updated.summary?.markdown || '');
-      setCourseStatus('课时总结完成');
-    } catch (err) {
-      setCourseStatus(`总结失败：${(err as Error).message}`);
-    } finally {
-      setLessonBusy(false);
-    }
+    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/summarize/stream', {
+      transcript: lessonTranscriptDraft,
+      instruction
+    }, 'Summary finished');
+  }
+
+  async function runActiveLesson() {
+    if (!activeLesson) return;
+    await streamLessonAction('/api/course-lessons/' + activeLesson.id + '/run/stream', {
+      transcript: lessonTranscriptDraft.trim() ? lessonTranscriptDraft : '',
+      instruction,
+      correct: true
+    }, 'Single lesson run finished');
   }
 
   async function saveActiveLessonNote() {
@@ -1453,20 +1523,23 @@ function App() {
               title={activeLesson.video?.title || `课时 ${activeLesson.index}`}
               extra={
                 <Space wrap>
+                  <Button icon={<DownloadOutlined />} loading={lessonBusy} onClick={downloadActiveLessonAudio}>
+                    {'\u4e0b\u8f7d\u97f3\u9891'}
+                  </Button>
+                  <Button icon={<AudioOutlined />} loading={lessonBusy} onClick={transcribeActiveLesson}>
+                    {'\u8f6c\u5199\u5e76\u4f18\u5316'}
+                  </Button>
+                  <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={runActiveLesson}>
+                    {'\u4e00\u952e\u8dd1\u672c\u8bfe'}
+                  </Button>
+                  <Button icon={<FileTextOutlined />} loading={lessonBusy} onClick={summarizeActiveLesson}>
+                    {'\u7ee7\u7eed\u603b\u7ed3'}
+                  </Button>
                   <Button icon={<SaveOutlined />} loading={lessonBusy} onClick={saveLessonDraft}>
-                    保存修改
-                  </Button>
-                  <Button icon={<AudioOutlined />} loading={lessonBusy} disabled={!activeLesson.audio_path} onClick={transcribeActiveLesson}>
-                    转写并优化
-                  </Button>
-                  <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} onClick={summarizeActiveLesson}>
-                    继续总结
-                  </Button>
-                  <Button icon={<FileTextOutlined />} loading={lessonBusy} onClick={saveActiveLessonNote}>
-                    保存笔记
+                    {'\u4fdd\u5b58\u4fee\u6539'}
                   </Button>
                   <Button icon={<CloudUploadOutlined />} loading={lessonBusy} disabled={!lessonSummaryDraft.trim()} onClick={syncActiveLessonFeishu}>
-                    存飞书
+                    {'\u5b58\u98de\u4e66'}
                   </Button>
                 </Space>
               }
@@ -1477,6 +1550,13 @@ function App() {
                 <Descriptions.Item label="错误">{activeLesson.error || '-'}</Descriptions.Item>
                 <Descriptions.Item label="更新时间">{activeLesson.updated_at}</Descriptions.Item>
               </Descriptions>
+            </Card>
+
+            <Card title={'\u8bfe\u65f6\u8fdb\u5ea6'} extra={<Tag color={lessonBusy ? 'processing' : 'default'}>{lessonBusy ? 'running' : 'idle'}</Tag>}>
+              <Alert className="compactAlert" type={courseStatus.startsWith('Failed') || courseStatus.includes('\u5931\u8d25') ? 'error' : 'info'} showIcon message={courseStatus} />
+              <pre className="courseLog">
+                {courseLogs.length ? courseLogs.join('\n') : '\u7b49\u5f85\u8bfe\u65f6\u4efb\u52a1...'}
+              </pre>
             </Card>
 
             <Row gutter={[16, 16]}>

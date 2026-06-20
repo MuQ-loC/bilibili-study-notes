@@ -203,6 +203,21 @@ body {
   font-family: Consolas, "Microsoft YaHei", monospace;
 }
 
+.courseLog {
+  height: 170px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 6px;
+  background: #111827;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.55;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+}
+
 .previewText {
   min-height: 98px !important;
   line-height: 1.55;

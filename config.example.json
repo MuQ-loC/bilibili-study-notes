@@ -11,6 +11,9 @@
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
     "model": "deepseek-chat",
+    "spark_app_id_env": "SPARK_APP_ID",
+    "spark_api_key_env": "SPARK_API_KEY",
+    "spark_api_secret_env": "SPARK_API_SECRET",
     "dify_app_type": "chat",
     "dify_user": "bilibili-study-notes"
   },

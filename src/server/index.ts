@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { MemoryStore } from './store.js';
-import type { Note, Transcript, Video } from './types.js';
+import type { CourseLesson, Note, Transcript, Video } from './types.js';
 import { AIProvider } from './providers/ai.js';
 import { ASRProvider } from './providers/asr.js';
 import { BilibiliClient, extractBvid } from './providers/bilibili.js';
@@ -170,33 +170,149 @@ app.post('/api/course-lessons/:id', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/course-lessons/:id/transcribe', asyncHandler(async (req, res) => {
-  const lesson = store.getCourseLesson(String(req.params.id));
-  if (!lesson.video) throw new Error('lesson has no video info');
-  const audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
-  if (!audioPath) throw new Error('lesson has no cached audio path');
+  let lesson = await ensureLessonVideo(store.getCourseLesson(String(req.params.id)));
+  let audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
+  if (!audioPath || !(await fileExists(audioPath))) {
+    audioPath = await asr.downloadAudio(lesson.video!);
+    lesson = await store.updateCourseLesson(lesson.id, { audio_path: audioPath, status: 'cached', error: '' });
+  }
   await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
-  const transcript = await asr.transcribeAudio(lesson.video, audioPath);
-  await store.saveTranscript(lesson.video.id, transcript);
+  const transcript = await asr.transcribeAudio(lesson.video!, audioPath);
+  await store.saveTranscript(lesson.video!.id, transcript);
   const shouldCorrect = req.body.correct !== false;
   if (!shouldCorrect) {
     res.json(await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' }));
     return;
   }
   await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
-  const correctedText = await ai.correctTranscript(lesson.video, transcript.content);
-  const corrected = await store.saveTranscript(lesson.video.id, { source: 'ai_corrected', language: 'zh-CN', content: correctedText });
+  const correctedText = await ai.correctTranscript(lesson.video!, transcript.content);
+  const corrected = await store.saveTranscript(lesson.video!.id, { source: 'ai_corrected', language: 'zh-CN', content: correctedText });
   res.json(await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing', error: '' }));
 }));
 
+app.post('/api/course-lessons/:id/download-audio/stream', asyncHandler(async (req, res) => {
+  const initial = store.getCourseLesson(String(req.params.id));
+  sse(res, async (send) => {
+    let lesson = await ensureLessonVideo(initial, send);
+    const currentAudio = String(req.body.audio_path || lesson.audio_path || '').trim();
+    if (currentAudio && await fileExists(currentAudio)) {
+      const updated = await store.updateCourseLesson(lesson.id, { audio_path: currentAudio, status: 'cached', error: '' });
+      send('done', { lesson: updated, message: 'Audio is already cached' });
+      return;
+    }
+    send('status', { message: 'Downloading lesson audio...' });
+    await store.updateCourseLesson(lesson.id, { status: 'analyzing', error: '' });
+    const audioPath = await asr.downloadAudio(lesson.video!, (message) => send('progress', { message }));
+    lesson = await store.updateCourseLesson(lesson.id, {
+      audio_path: audioPath,
+      status: 'cached',
+      error: 'Audio cached: ' + audioPath
+    });
+    send('done', { lesson, message: 'Audio download finished' });
+  });
+}));
+
+app.post('/api/course-lessons/:id/transcribe/stream', asyncHandler(async (req, res) => {
+  const shouldCorrect = req.body.correct !== false;
+  const initial = store.getCourseLesson(String(req.params.id));
+  sse(res, async (send) => {
+    let lesson = await ensureLessonVideo(initial, send);
+    let audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
+    if (!audioPath || !(await fileExists(audioPath))) {
+      send('status', { message: 'No cached audio found, downloading first...' });
+      audioPath = await asr.downloadAudio(lesson.video!, (message) => send('progress', { message }));
+      lesson = await store.updateCourseLesson(lesson.id, { audio_path: audioPath, status: 'cached', error: '' });
+    }
+    send('status', { message: 'Starting lesson transcription...' });
+    await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
+    const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }));
+    await store.saveTranscript(lesson.video!.id, transcript);
+    send('progress', { message: 'ASR finished, transcript length: ' + transcript.content.length });
+    if (!shouldCorrect) {
+      const updated = await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
+      send('done', { lesson: updated });
+      return;
+    }
+    send('status', { message: 'Correcting transcript with AI...' });
+    await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
+    const correctedText = await ai.correctTranscript(lesson.video!, transcript.content);
+    const corrected = await store.saveTranscript(lesson.video!.id, { source: 'ai_corrected', language: 'zh-CN', content: correctedText });
+    send('progress', { message: 'AI correction finished, transcript length: ' + corrected.content.length });
+    const updated = await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing', error: '' });
+    send('done', { lesson: updated });
+  });
+}));
+
 app.post('/api/course-lessons/:id/summarize', asyncHandler(async (req, res) => {
-  const lesson = store.getCourseLesson(String(req.params.id));
-  if (!lesson.video) throw new Error('课时还没有解析视频信息');
+  const lesson = await ensureLessonVideo(store.getCourseLesson(String(req.params.id)));
   const text = String(req.body.transcript || lesson.corrected_transcript?.content || lesson.transcript?.content || '');
-  if (!text.trim()) throw new Error('课时没有可总结的字幕/转写文本');
+  if (!text.trim()) throw new Error('lesson has no transcript to summarize');
   const updated = await store.updateCourseLesson(lesson.id, { status: 'summarizing', error: '' });
-  const summary = await ai.summarize(lesson.video, text, String(req.body.instruction || ''));
-  const saved = await store.saveSummary(lesson.video.id, { model: summary.model, markdown: summary.markdown });
+  const summary = await ai.summarize(lesson.video!, text, String(req.body.instruction || ''));
+  const saved = await store.saveSummary(lesson.video!.id, { model: summary.model, markdown: summary.markdown });
   res.json(await store.updateCourseLesson(updated.id, { summary: saved, status: 'done' }));
+}));
+
+app.post('/api/course-lessons/:id/summarize/stream', asyncHandler(async (req, res) => {
+  const initial = store.getCourseLesson(String(req.params.id));
+  sse(res, async (send) => {
+    const lesson = await ensureLessonVideo(initial, send);
+    const text = String(req.body.transcript || lesson.corrected_transcript?.content || lesson.transcript?.content || '');
+    if (!text.trim()) throw new Error('lesson has no transcript to summarize');
+    send('status', { message: 'Starting summary, input length: ' + text.length });
+    const updated = await store.updateCourseLesson(lesson.id, { status: 'summarizing', error: '' });
+    send('status', { message: 'AI is generating study notes...' });
+    const summary = await ai.summarize(lesson.video!, text, String(req.body.instruction || ''));
+    send('progress', { message: 'AI summary finished, Markdown length: ' + summary.markdown.length });
+    const saved = await store.saveSummary(lesson.video!.id, { model: summary.model, markdown: summary.markdown });
+    const done = await store.updateCourseLesson(updated.id, { summary: saved, status: 'done' });
+    send('done', { lesson: done });
+  });
+}));
+
+app.post('/api/course-lessons/:id/run/stream', asyncHandler(async (req, res) => {
+  const initial = store.getCourseLesson(String(req.params.id));
+  sse(res, async (send) => {
+    let lesson = await ensureLessonVideo(initial, send);
+    let text = String(req.body.transcript || '').trim();
+    if (text) {
+      send('status', { message: 'Using edited transcript from the page...' });
+      const manual = await store.saveTranscript(lesson.video!.id, { source: 'manual_edit', language: 'zh-CN', content: text });
+      lesson = await store.updateCourseLesson(lesson.id, { corrected_transcript: manual, status: 'summarizing', error: '' });
+    } else {
+      text = lesson.corrected_transcript?.content || lesson.transcript?.content || '';
+    }
+
+    if (!text.trim()) {
+      let audioPath = String(lesson.audio_path || '').trim();
+      if (!audioPath || !(await fileExists(audioPath))) {
+        send('status', { message: 'Downloading lesson audio...' });
+        audioPath = await asr.downloadAudio(lesson.video!, (message) => send('progress', { message }));
+        lesson = await store.updateCourseLesson(lesson.id, { audio_path: audioPath, status: 'cached', error: '' });
+      }
+      send('status', { message: 'Transcribing lesson audio...' });
+      await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
+      const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }));
+      await store.saveTranscript(lesson.video!.id, transcript);
+      lesson = await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
+      text = transcript.content;
+    }
+
+    if (req.body.correct !== false && (!lesson.corrected_transcript || lesson.corrected_transcript.content !== text)) {
+      send('status', { message: 'Correcting transcript with AI...' });
+      await store.updateCourseLesson(lesson.id, { status: 'correcting', error: '' });
+      text = await ai.correctTranscript(lesson.video!, text);
+      const corrected = await store.saveTranscript(lesson.video!.id, { source: 'ai_corrected', language: 'zh-CN', content: text });
+      lesson = await store.updateCourseLesson(lesson.id, { corrected_transcript: corrected, status: 'summarizing', error: '' });
+    }
+
+    if (!text.trim()) throw new Error('lesson has no transcript to summarize');
+    send('status', { message: 'Generating summary, transcript length: ' + text.length });
+    const summary = await ai.summarize(lesson.video!, text, String(req.body.instruction || ''));
+    const saved = await store.saveSummary(lesson.video!.id, { model: summary.model, markdown: summary.markdown });
+    lesson = await store.updateCourseLesson(lesson.id, { summary: saved, status: 'done', error: '' });
+    send('done', { lesson, message: 'Single lesson run finished' });
+  });
 }));
 
 app.post('/api/course-lessons/:id/note', asyncHandler(async (req, res) => {
@@ -371,26 +487,47 @@ function normalizeBilibiliUrl(raw: string): string {
   return `https://www.bilibili.com/video/${bvid}${Number(page) > 1 ? `?p=${Number(page)}` : ''}`;
 }
 
+async function ensureLessonVideo(lesson: CourseLesson, send?: SendSSE): Promise<CourseLesson> {
+  if (lesson.video) {
+    await store.saveVideo(lesson.video);
+    return lesson;
+  }
+  send?.('status', { message: 'Resolving Bilibili lesson info...' });
+  await store.updateCourseLesson(lesson.id, { status: 'analyzing', error: '' });
+  const { video, transcript } = await bilibili.analyze(lesson.url);
+  await store.saveVideo(video);
+  const patch: Partial<CourseLesson> = { video, status: transcript.content.trim() ? 'correcting' : 'queued', error: '' };
+  if (transcript.content.trim()) {
+    patch.transcript = await store.saveTranscript(video.id, transcript);
+  }
+  return store.updateCourseLesson(lesson.id, patch);
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  if (!filePath.trim()) return false;
+  const stat = await fs.stat(filePath).catch(() => undefined);
+  return Boolean(stat?.isFile() && stat.size > 0);
+}
+
 async function recoverAsrCache(): Promise<number> {
   const workDir = cfg.asr.work_dir || 'notes/asr';
   const entries = await fs.readdir(workDir, { withFileTypes: true }).catch(() => []);
-  const caches = [];
+  const caches: Array<{ bvid: string; cid: number; audioPath: string }> = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const match = entry.name.match(/^(BV[0-9A-Za-z]{8,})-(\d+)$/i);
     if (!match) continue;
     const audioDir = path.join(workDir, entry.name, 'audio');
     const files = await fs.readdir(audioDir, { withFileTypes: true }).catch(() => []);
-    const audioFiles = [];
+    const audioFiles: Array<{ path: string; size: number }> = [];
     for (const file of files) {
       if (!file.isFile() || file.name.endsWith('.part')) continue;
       const audioPath = path.join(audioDir, file.name);
       const stat = await fs.stat(audioPath).catch(() => undefined);
       if (stat && stat.size > 0) audioFiles.push({ path: audioPath, size: stat.size });
     }
-    if (!audioFiles.length) continue;
     audioFiles.sort((a, b) => b.size - a.size);
-    caches.push({ bvid: match[1], cid: Number(match[2]), audioPath: audioFiles[0].path });
+    caches.push({ bvid: match[1], cid: Number(match[2]), audioPath: audioFiles[0]?.path || '' });
   }
 
   let recovered = 0;
@@ -402,33 +539,39 @@ async function recoverAsrCache(): Promise<number> {
   }
 
   for (const [bvid, items] of byBvid) {
-    const sourceUrl = `https://www.bilibili.com/video/${bvid}`;
+    const sourceUrl = 'https://www.bilibili.com/video/' + bvid;
     const existing = store.listCourses().find((course) => course.source_url.includes(bvid));
-    const course = existing || await store.createCourse(sourceUrl, `ASR缓存 ${bvid}`);
+    const course = existing || await store.createCourse(sourceUrl, 'ASR cache ' + bvid);
+    const currentLessons = store.listCourseLessons(course.id);
     const videos = await bilibili.listVideoPageInfos(sourceUrl).catch(() => []);
-    const byCid = new Map(videos.map((video, index) => [video.cid, { video, index: index + 1 }]));
-    const ordered = [...items].sort((a, b) => (byCid.get(a.cid)?.index || a.cid) - (byCid.get(b.cid)?.index || b.cid));
-    for (const [fallbackIndex, cache] of ordered.entries()) {
-      const matched = byCid.get(cache.cid);
-      const index = matched?.index || fallbackIndex + 1;
-      const video = matched?.video || {
-        id: randomUUID(),
-        url: `${sourceUrl}${index > 1 ? `?p=${index}` : ''}`,
-        bvid,
-        cid: cache.cid,
-        title: `${bvid} - ${cache.cid}`,
-        owner: '',
-        cover_url: '',
-        duration: 0
-      };
+    const cacheByCid = new Map(items.filter((item) => item.audioPath).map((item) => [item.cid, item.audioPath]));
+    const lessonVideos = videos.length
+      ? videos
+      : [...items].sort((a, b) => a.cid - b.cid).map((cache, index) => ({
+          id: randomUUID(),
+          url: sourceUrl + (index > 0 ? '?p=' + (index + 1) : ''),
+          bvid,
+          cid: cache.cid,
+          title: bvid + ' - ' + cache.cid,
+          owner: '',
+          cover_url: '',
+          duration: 0
+        }));
+
+    for (const [zeroIndex, video] of lessonVideos.entries()) {
+      const index = zeroIndex + 1;
+      const current = currentLessons.find((item) => item.index === index);
+      const audioPath = cacheByCid.get(video.cid) || current?.audio_path || '';
+      const hasAudio = audioPath ? await fileExists(audioPath) : false;
+      const keepStatus = current && !['queued', 'cached', 'analyzing', 'error'].includes(current.status);
       await store.upsertCourseLesson({
         course_id: course.id,
         index,
         url: video.url,
-        video,
-        status: 'cached',
-        audio_path: cache.audioPath,
-        error: `已发现本地音频缓存：${cache.audioPath}`
+        video: current?.video || video,
+        status: keepStatus ? current.status : hasAudio ? 'cached' : current?.status || 'queued',
+        audio_path: audioPath,
+        error: hasAudio ? 'Audio cached: ' + audioPath : current?.error || 'Audio not downloaded yet'
       });
       recovered += 1;
     }

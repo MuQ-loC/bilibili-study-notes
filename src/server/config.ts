@@ -10,6 +10,9 @@ const defaultConfig: AppConfig = {
     base_url: 'https://api.deepseek.com',
     api_key_env: 'DEEPSEEK_API_KEY',
     model: 'deepseek-chat',
+    spark_app_id_env: 'SPARK_APP_ID',
+    spark_api_key_env: 'SPARK_API_KEY',
+    spark_api_secret_env: 'SPARK_API_SECRET',
     dify_app_type: 'chat',
     dify_user: 'bilibili-study-notes'
   },
@@ -54,6 +57,9 @@ export function loadConfig(file = 'config.json'): AppConfig {
 
   cfg.bilibili.cookie ||= env(cfg.bilibili.cookie_env);
   cfg.ai.api_key ||= cfg.ai.api_key_env ? env(cfg.ai.api_key_env) : '';
+  cfg.ai.spark_app_id ||= cfg.ai.spark_app_id_env ? env(cfg.ai.spark_app_id_env) : '';
+  cfg.ai.spark_api_key ||= cfg.ai.spark_api_key_env ? env(cfg.ai.spark_api_key_env) : '';
+  cfg.ai.spark_api_secret ||= cfg.ai.spark_api_secret_env ? env(cfg.ai.spark_api_secret_env) : '';
   if (env('ASR_PROVIDER')) cfg.asr.provider = env('ASR_PROVIDER') as AppConfig['asr']['provider'];
   if (env('ASR_MODEL')) cfg.asr.model = env('ASR_MODEL');
   if (env('LOCAL_ASR_MODEL')) cfg.asr.model = env('LOCAL_ASR_MODEL');
