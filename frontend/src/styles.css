@@ -79,6 +79,11 @@ body {
   margin-top: 12px;
 }
 
+.modelSettingsCard {
+  margin-top: 12px;
+  border-color: #dbe4f0;
+}
+
 .metricCard {
   height: 100%;
   border-color: #dbe4f0;

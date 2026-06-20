@@ -6,19 +6,20 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { MemoryStore } from './store.js';
-import type { CourseLesson, Note, Transcript, Video } from './types.js';
+import type { AppConfig, CourseLesson, Note, Transcript, Video } from './types.js';
 import { AIProvider } from './providers/ai.js';
 import { ASRProvider } from './providers/asr.js';
 import { BilibiliClient, extractBvid } from './providers/bilibili.js';
 import { FeishuProvider } from './providers/feishu.js';
 import { TTSProvider } from './providers/tts.js';
 
-const cfg = loadConfig(process.env.CONFIG_PATH || 'config.json');
+const configFile = process.env.CONFIG_PATH || 'config.json';
+let cfg = loadConfig(configFile);
 const app = express();
 const store = new MemoryStore();
 const bilibili = new BilibiliClient(cfg.bilibili);
-const ai = new AIProvider(cfg.ai);
-const asr = new ASRProvider(cfg.asr);
+let ai = new AIProvider(cfg.ai);
+let asr = new ASRProvider(cfg.asr);
 const feishu = new FeishuProvider(cfg.feishu);
 const tts = new TTSProvider(cfg.tts);
 
@@ -26,6 +27,19 @@ app.use(express.json({ limit: '30mb' }));
 app.use('/files', express.static('notes'));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/api/config', asyncHandler(async (_req, res) => {
+  res.json(publicConfig());
+}));
+
+app.post('/api/config', asyncHandler(async (req, res) => {
+  const next = mergeRuntimeConfig(cfg, req.body || {});
+  await saveRuntimeConfig(next);
+  cfg = loadConfig(configFile);
+  ai = new AIProvider(cfg.ai);
+  asr = new ASRProvider(cfg.asr);
+  res.json(publicConfig());
+}));
 
 app.get('/api/tts/voices', asyncHandler(async (_req, res) => {
   res.json({
@@ -485,6 +499,83 @@ function normalizeBilibiliUrl(raw: string): string {
     }
   })();
   return `https://www.bilibili.com/video/${bvid}${Number(page) > 1 ? `?p=${Number(page)}` : ''}`;
+}
+
+function publicConfig() {
+  return {
+    ai: {
+      provider: cfg.ai.provider,
+      base_url: cfg.ai.base_url || '',
+      model: cfg.ai.model || '',
+      api_key_configured: Boolean(cfg.ai.api_key),
+      spark_app_id_configured: Boolean(cfg.ai.spark_app_id),
+      spark_api_key_configured: Boolean(cfg.ai.spark_api_key),
+      spark_api_secret_configured: Boolean(cfg.ai.spark_api_secret)
+    },
+    asr: {
+      provider: cfg.asr.provider,
+      model: cfg.asr.model || '',
+      device: cfg.asr.device || 'auto',
+      work_dir: cfg.asr.work_dir || '',
+      python_path: cfg.asr.python_path || '',
+      openai_base_url: cfg.asr.openai_base_url || '',
+      openai_api_key_configured: Boolean(cfg.asr.openai_api_key)
+    }
+  };
+}
+
+function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): AppConfig {
+  const next: AppConfig = JSON.parse(JSON.stringify(current)) as AppConfig;
+  const aiPatch = isRecord(body.ai) ? body.ai : {};
+  const asrPatch = isRecord(body.asr) ? body.asr : {};
+
+  const aiProvider = stringValue(aiPatch.provider);
+  if (aiProvider && ['openai_compatible', 'deepseek', 'ollama', 'dify', 'spark'].includes(aiProvider)) {
+    next.ai.provider = aiProvider as AppConfig['ai']['provider'];
+  }
+  assignString(next.ai, 'base_url', aiPatch.base_url);
+  assignString(next.ai, 'model', aiPatch.model);
+  assignSecret(next.ai, 'api_key', aiPatch.api_key);
+  assignSecret(next.ai, 'spark_app_id', aiPatch.spark_app_id);
+  assignSecret(next.ai, 'spark_api_key', aiPatch.spark_api_key);
+  assignSecret(next.ai, 'spark_api_secret', aiPatch.spark_api_secret);
+
+  const asrProvider = stringValue(asrPatch.provider);
+  if (asrProvider && ['none', 'openai', 'local'].includes(asrProvider)) {
+    next.asr.provider = asrProvider as AppConfig['asr']['provider'];
+  }
+  assignString(next.asr, 'model', asrPatch.model);
+  assignString(next.asr, 'device', asrPatch.device);
+  assignString(next.asr, 'work_dir', asrPatch.work_dir);
+  assignString(next.asr, 'python_path', asrPatch.python_path);
+  assignString(next.asr, 'openai_base_url', asrPatch.openai_base_url);
+  assignSecret(next.asr, 'openai_api_key', asrPatch.openai_api_key);
+  return next;
+}
+
+async function saveRuntimeConfig(next: AppConfig): Promise<void> {
+  const target = path.resolve(configFile);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, JSON.stringify(next, null, 2), 'utf8');
+}
+
+function assignString<T extends Record<string, unknown>>(target: T, key: keyof T, value: unknown): void {
+  const text = stringValue(value);
+  if (text !== undefined) target[key] = text as T[keyof T];
+}
+
+function assignSecret<T extends Record<string, unknown>>(target: T, key: keyof T, value: unknown): void {
+  const text = stringValue(value);
+  if (text) target[key] = text as T[keyof T];
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return value.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function ensureLessonVideo(lesson: CourseLesson, send?: SendSSE): Promise<CourseLesson> {

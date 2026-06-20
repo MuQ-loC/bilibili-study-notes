@@ -118,6 +118,32 @@ type TTSPreview = {
   audio_url: string;
 };
 
+type RuntimeConfig = {
+  ai: {
+    provider: 'openai_compatible' | 'deepseek' | 'ollama' | 'dify' | 'spark';
+    base_url: string;
+    model: string;
+    api_key?: string;
+    spark_app_id?: string;
+    spark_api_key?: string;
+    spark_api_secret?: string;
+    api_key_configured?: boolean;
+    spark_app_id_configured?: boolean;
+    spark_api_key_configured?: boolean;
+    spark_api_secret_configured?: boolean;
+  };
+  asr: {
+    provider: 'none' | 'openai' | 'local';
+    model: string;
+    device: string;
+    work_dir: string;
+    python_path: string;
+    openai_base_url: string;
+    openai_api_key?: string;
+    openai_api_key_configured?: boolean;
+  };
+};
+
 type AppDraft = {
   url?: string;
   batchUrl?: string;
@@ -279,6 +305,10 @@ function App() {
   const [lessonTranscriptDraft, setLessonTranscriptDraft] = useState('');
   const [lessonSummaryDraft, setLessonSummaryDraft] = useState('');
   const [lessonBusy, setLessonBusy] = useState(false);
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
+  const [configDraft, setConfigDraft] = useState<RuntimeConfig | null>(null);
+  const [configStatus, setConfigStatus] = useState('Loading model config...');
+  const [configBusy, setConfigBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const currentPlayer = useMemo(() => playerUrl(video), [video]);
@@ -321,6 +351,7 @@ function App() {
 
   useEffect(() => {
     loadCourses();
+    loadRuntimeConfig();
   }, []);
 
   useEffect(() => {
@@ -358,6 +389,56 @@ function App() {
 
   function addCourseLog(message: string) {
     setCourseLogs((items) => [...items, `${new Date().toLocaleTimeString()} ${message}`].slice(-120));
+  }
+
+  async function loadRuntimeConfig() {
+    try {
+      const res = await api<RuntimeConfig>('/api/config');
+      const draft = {
+        ...res,
+        ai: { ...res.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
+        asr: { ...res.asr, openai_api_key: '' }
+      };
+      setRuntimeConfig(res);
+      setConfigDraft(draft);
+      setConfigStatus('Model config loaded');
+    } catch (err) {
+      setConfigStatus(`Load failed: ${(err as Error).message}`);
+    }
+  }
+
+  function patchConfig(section: 'ai' | 'asr', key: string, value: string) {
+    setConfigDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        [section]: {
+          ...current[section],
+          [key]: value
+        }
+      } as RuntimeConfig;
+    });
+  }
+
+  async function saveRuntimeConfig() {
+    if (!configDraft) return;
+    setConfigBusy(true);
+    setConfigStatus('Saving model config...');
+    try {
+      const saved = await api<RuntimeConfig>('/api/config', configDraft);
+      const draft = {
+        ...saved,
+        ai: { ...saved.ai, api_key: '', spark_app_id: '', spark_api_key: '', spark_api_secret: '' },
+        asr: { ...saved.asr, openai_api_key: '' }
+      };
+      setRuntimeConfig(saved);
+      setConfigDraft(draft);
+      setConfigStatus('Saved. New model config is active.');
+    } catch (err) {
+      setConfigStatus(`Save failed: ${(err as Error).message}`);
+    } finally {
+      setConfigBusy(false);
+    }
   }
 
   async function loadCourses() {
@@ -1591,6 +1672,137 @@ function App() {
     </Row>
   );
 
+  const modelSettingsPane = (
+    <Card
+      className="modelSettingsCard"
+      title="模型设置"
+      extra={<Button type="primary" loading={configBusy} onClick={saveRuntimeConfig}>保存并生效</Button>}
+    >
+      {configDraft ? (
+        <Space direction="vertical" size={12} className="full">
+          <Alert
+            type={configStatus.startsWith('Save failed') || configStatus.startsWith('Load failed') ? 'error' : 'info'}
+            showIcon
+            message={configStatus}
+            description="AI Model 用于总结、校正和短标题；ASR Model 用于本地 Whisper 转写。密钥框留空会保留当前配置。"
+          />
+          <Row gutter={[12, 12]}>
+            <Col xs={24} lg={12}>
+              <Form layout="vertical">
+                <Form.Item label="AI Provider">
+                  <Select
+                    value={configDraft.ai.provider}
+                    onChange={(value) => patchConfig('ai', 'provider', value)}
+                    options={[
+                      { value: 'spark', label: 'Spark / 星火' },
+                      { value: 'openai_compatible', label: 'OpenAI Compatible' },
+                      { value: 'deepseek', label: 'DeepSeek' },
+                      { value: 'ollama', label: 'Ollama' },
+                      { value: 'dify', label: 'Dify' }
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item label="AI Model">
+                  <Input
+                    value={configDraft.ai.model}
+                    onChange={(event) => patchConfig('ai', 'model', event.target.value)}
+                    placeholder="generalv3.5 / 4.0Ultra / deepseek-chat / gpt-4o-mini"
+                  />
+                </Form.Item>
+                <Form.Item label="AI Base URL">
+                  <Input
+                    value={configDraft.ai.base_url}
+                    onChange={(event) => patchConfig('ai', 'base_url', event.target.value)}
+                    placeholder="Spark WebSocket 可留空；OpenAI-compatible 填 /v1 地址"
+                  />
+                </Form.Item>
+                <Form.Item label={`API Key${runtimeConfig?.ai.api_key_configured ? ' (configured)' : ''}`}>
+                  <Input.Password
+                    value={configDraft.ai.api_key || ''}
+                    onChange={(event) => patchConfig('ai', 'api_key', event.target.value)}
+                    placeholder="留空保留当前 key"
+                  />
+                </Form.Item>
+                {configDraft.ai.provider === 'spark' ? (
+                  <Row gutter={[8, 8]}>
+                    <Col xs={24} md={8}>
+                      <Form.Item label={`Spark APPID${runtimeConfig?.ai.spark_app_id_configured ? ' (configured)' : ''}`}>
+                        <Input.Password value={configDraft.ai.spark_app_id || ''} onChange={(event) => patchConfig('ai', 'spark_app_id', event.target.value)} placeholder="留空保留" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Form.Item label={`Spark APIKey${runtimeConfig?.ai.spark_api_key_configured ? ' (configured)' : ''}`}>
+                        <Input.Password value={configDraft.ai.spark_api_key || ''} onChange={(event) => patchConfig('ai', 'spark_api_key', event.target.value)} placeholder="留空保留" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Form.Item label={`Spark APISecret${runtimeConfig?.ai.spark_api_secret_configured ? ' (configured)' : ''}`}>
+                        <Input.Password value={configDraft.ai.spark_api_secret || ''} onChange={(event) => patchConfig('ai', 'spark_api_secret', event.target.value)} placeholder="留空保留" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                ) : null}
+              </Form>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form layout="vertical">
+                <Form.Item label="ASR Provider">
+                  <Select
+                    value={configDraft.asr.provider}
+                    onChange={(value) => patchConfig('asr', 'provider', value)}
+                    options={[
+                      { value: 'local', label: 'Local faster-whisper' },
+                      { value: 'openai', label: 'OpenAI-compatible ASR' },
+                      { value: 'none', label: 'Disabled' }
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item label="ASR / Whisper Model">
+                  <Input
+                    value={configDraft.asr.model}
+                    onChange={(event) => patchConfig('asr', 'model', event.target.value)}
+                    placeholder="D:\\Ev\\...\\faster-whisper-small or whisper-1"
+                  />
+                </Form.Item>
+                <Row gutter={[8, 8]}>
+                  <Col xs={24} md={8}>
+                    <Form.Item label="Device">
+                      <Select
+                        value={configDraft.asr.device || 'auto'}
+                        onChange={(value) => patchConfig('asr', 'device', value)}
+                        options={[
+                          { value: 'auto', label: 'auto' },
+                          { value: 'cuda', label: 'cuda' },
+                          { value: 'cpu', label: 'cpu' }
+                        ]}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={16}>
+                    <Form.Item label="Work Dir">
+                      <Input value={configDraft.asr.work_dir} onChange={(event) => patchConfig('asr', 'work_dir', event.target.value)} placeholder="notes/asr" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item label="Local Python Path">
+                  <Input value={configDraft.asr.python_path} onChange={(event) => patchConfig('asr', 'python_path', event.target.value)} placeholder="D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe" />
+                </Form.Item>
+                <Form.Item label="ASR OpenAI Base URL">
+                  <Input value={configDraft.asr.openai_base_url} onChange={(event) => patchConfig('asr', 'openai_base_url', event.target.value)} placeholder="https://api.openai.com/v1" />
+                </Form.Item>
+                <Form.Item label={`ASR API Key${runtimeConfig?.asr.openai_api_key_configured ? ' (configured)' : ''}`}>
+                  <Input.Password value={configDraft.asr.openai_api_key || ''} onChange={(event) => patchConfig('asr', 'openai_api_key', event.target.value)} placeholder="留空保留当前 key" />
+                </Form.Item>
+              </Form>
+            </Col>
+          </Row>
+        </Space>
+      ) : (
+        <Empty description="Model config is loading" />
+      )}
+    </Card>
+  );
+
   const dashboard = (
     <div className="dashboard">
       <Card className="heroPanel">
@@ -1615,6 +1827,8 @@ function App() {
           </Space>
         </Flex>
       </Card>
+
+      {modelSettingsPane}
 
       <Row gutter={[12, 12]} className="metricRow">
         <Col xs={12} md={6}>
