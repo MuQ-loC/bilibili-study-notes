@@ -77,10 +77,8 @@ export class FeishuProvider {
   private async appendTable(token: string, documentId: string, rows: string[][]): Promise<void> {
     const cleanRows = normalizeTableRows(rows);
     if (!cleanRows.length) return;
-    if (cleanRows.length > 40 || Math.max(...cleanRows.map((row) => row.length), 1) > 8) {
-      await this.appendTableFallback(token, documentId, cleanRows);
-      return;
-    }
+    await this.appendTableFallback(token, documentId, cleanRows);
+    return;
     const columnSize = Math.max(...cleanRows.map((row) => row.length), 1);
     const normalizedRows = cleanRows.map((row) => [...row, ...Array(columnSize - row.length).fill('')]);
     try {
@@ -162,6 +160,7 @@ function markdownToBlocks(markdown: string): RenderItem[] {
   const blocks: RenderItem[] = [];
   let inCode = false;
   let codeLines: string[] = [];
+  let orderedCounter = 0;
   const lines = markdown.split('\n');
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].trimEnd();
@@ -187,6 +186,19 @@ function markdownToBlocks(markdown: string): RenderItem[] {
       i = table.endIndex;
       continue;
     }
+    const topHeading = trimmed.match(/^\d+[.)]\s+(课程目标|前置知识|时间轴目录|分段学习笔记|操作步骤|命令\/代码\/配置项|关键概念解释|易错点和坑|复习清单|可执行\s*TODO)\s*$/);
+    if (topHeading) {
+      orderedCounter = 0;
+      blocks.push(richTextBlock(4, 'heading2', cleanInline(trimmed)));
+      continue;
+    }
+    const ordered = trimmed.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      orderedCounter += 1;
+      blocks.push(textBlock(`${orderedCounter}. ${cleanInline(ordered[1])}`));
+      continue;
+    }
+    if (!/^[-*+]\s+/.test(trimmed)) orderedCounter = 0;
     blocks.push(markdownLineToBlock(trimmed));
   }
   if (inCode && codeLines.join('\n').trim()) blocks.push(codeBlock(codeLines.join('\n')));
@@ -236,7 +248,7 @@ function markdownLineToBlock(line: string): FeishuBlock {
   const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
   if (bullet) return richTextBlock(12, 'bullet', cleanInline(bullet[1]));
   const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-  if (ordered) return richTextBlock(13, 'ordered', cleanInline(ordered[1]));
+  if (ordered) return textBlock(cleanInline(line));
   const quote = line.match(/^>\s+(.+)$/);
   if (quote) return richTextBlock(15, 'quote', cleanInline(quote[1]));
   return textBlock(cleanInline(line));
@@ -318,10 +330,13 @@ function rowsToPlainTable(rows: string[][]): string {
   const cleanRows = normalizeTableRows(rows);
   const columnSize = Math.max(...cleanRows.map((row) => row.length), 1);
   const normalizedRows = cleanRows.map((row) => [...row, ...Array(columnSize - row.length).fill('')].map(cleanInline));
-  const widths = Array.from({ length: columnSize }, (_, index) => Math.min(42, Math.max(...normalizedRows.map((row) => displayWidth(row[index] || '')))));
-  return normalizedRows
+  const widths = Array.from({ length: columnSize }, (_, index) => Math.min(index === 0 ? 18 : 80, Math.max(...normalizedRows.map((row) => displayWidth(row[index] || '')))));
+  const rendered = normalizedRows
     .map((row) => row.map((cell, index) => padDisplay(cell, widths[index])).join(' | '))
-    .join('\n');
+  if (rendered.length > 1) {
+    rendered.splice(1, 0, widths.map((width) => '-'.repeat(width)).join('-|-'));
+  }
+  return rendered.join('\n');
 }
 
 function displayWidth(value: string): number {
@@ -329,7 +344,7 @@ function displayWidth(value: string): number {
 }
 
 function padDisplay(value: string, width: number): string {
-  const clipped = Array.from(value).slice(0, 42).join('');
+  const clipped = Array.from(value).slice(0, width).join('');
   return clipped + ' '.repeat(Math.max(0, width - displayWidth(clipped)));
 }
 
