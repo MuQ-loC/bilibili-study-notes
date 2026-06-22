@@ -73,10 +73,20 @@ app.post('/api/videos/analyze', asyncHandler(async (req, res) => {
 
 app.post('/api/videos/transcribe/stream', asyncHandler(async (req, res) => {
   const video = store.getVideo(String(req.body.video_id || ''));
+  const language = normalizeASRLanguage(req.body.language) || cfg.asr.language || 'foreign';
   sse(res, async (send) => {
-    const transcript = await asr.transcribe(video, (message) => send('progress', { message }));
+    const transcript = await asr.transcribe(video, (message) => send('progress', { message }), { language });
     const saved = await store.saveTranscript(video.id, transcript);
     send('done', { transcript: saved });
+  });
+}));
+
+app.post('/api/videos/download-audio/stream', asyncHandler(async (req, res) => {
+  const video = store.getVideo(String(req.body.video_id || ''));
+  sse(res, async (send) => {
+    send('status', { message: 'Downloading video audio...' });
+    const audioPath = await asr.downloadAudio(video, (message) => send('progress', { message }));
+    send('done', { message: 'Audio download finished', audio_path: audioPath });
   });
 }));
 
@@ -121,6 +131,29 @@ app.post('/api/notes', asyncHandler(async (req, res) => {
   res.json(note);
 }));
 
+app.post('/api/videos/save-workspace', asyncHandler(async (req, res) => {
+  const video = store.getVideo(String(req.body.video_id || ''));
+  const transcriptText = String(req.body.transcript || '');
+  const markdown = String(req.body.markdown || '');
+  const out: { transcript?: Transcript; summary?: unknown; note?: Note } = {};
+  if (transcriptText.trim()) {
+    out.transcript = await store.saveTranscript(video.id, {
+      source: 'manual_edit',
+      language: 'zh-CN',
+      content: transcriptText
+    });
+  }
+  if (markdown.trim()) {
+    out.summary = await store.saveSummary(video.id, {
+      model: 'manual',
+      markdown
+    });
+    out.note = await store.saveNote(video, String(req.body.title || video.title), markdown);
+  }
+  if (!out.transcript && !out.summary) throw new Error('nothing to save');
+  res.json(out);
+}));
+
 app.post('/api/feishu/sync', asyncHandler(async (req, res) => {
   const note = store.getNote(String(req.body.note_id || ''));
   const documentId = await feishu.sync(note, {
@@ -161,6 +194,12 @@ app.get('/api/courses/:id', asyncHandler(async (req, res) => {
   res.json({ course, lessons: store.listCourseLessons(course.id) });
 }));
 
+app.post('/api/courses/:id/refresh', asyncHandler(async (req, res) => {
+  const course = store.getCourse(String(req.params.id));
+  const added = await refreshCourseLessons(course.id);
+  res.json({ course: store.getCourse(course.id), lessons: store.listCourseLessons(course.id), added });
+}));
+
 app.patch('/api/course-lessons/:id', asyncHandler(async (req, res) => {
   const lesson = await store.updateCourseLesson(String(req.params.id), {
     transcript: req.body.transcript,
@@ -185,15 +224,17 @@ app.post('/api/course-lessons/:id', asyncHandler(async (req, res) => {
 
 app.post('/api/course-lessons/:id/transcribe', asyncHandler(async (req, res) => {
   let lesson = await ensureLessonVideo(store.getCourseLesson(String(req.params.id)));
-  let audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
+  const body = isRecord(req.body) ? req.body : {};
+  const language = normalizeASRLanguage(body.language) || cfg.asr.language || 'foreign';
+  let audioPath = String(body.audio_path || lesson.audio_path || '').trim();
   if (!audioPath || !(await fileExists(audioPath))) {
     audioPath = await asr.downloadAudio(lesson.video!);
     lesson = await store.updateCourseLesson(lesson.id, { audio_path: audioPath, status: 'cached', error: '' });
   }
   await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
-  const transcript = await asr.transcribeAudio(lesson.video!, audioPath);
+  const transcript = await asr.transcribeAudio(lesson.video!, audioPath, undefined, { language });
   await store.saveTranscript(lesson.video!.id, transcript);
-  const shouldCorrect = req.body.correct !== false;
+  const shouldCorrect = body.correct !== false;
   if (!shouldCorrect) {
     res.json(await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' }));
     return;
@@ -206,9 +247,10 @@ app.post('/api/course-lessons/:id/transcribe', asyncHandler(async (req, res) => 
 
 app.post('/api/course-lessons/:id/download-audio/stream', asyncHandler(async (req, res) => {
   const initial = store.getCourseLesson(String(req.params.id));
+  const body = isRecord(req.body) ? req.body : {};
   sse(res, async (send) => {
     let lesson = await ensureLessonVideo(initial, send);
-    const currentAudio = String(req.body.audio_path || lesson.audio_path || '').trim();
+    const currentAudio = String(body.audio_path || lesson.audio_path || '').trim();
     if (currentAudio && await fileExists(currentAudio)) {
       const updated = await store.updateCourseLesson(lesson.id, { audio_path: currentAudio, status: 'cached', error: '' });
       send('done', { lesson: updated, message: 'Audio is already cached' });
@@ -227,11 +269,13 @@ app.post('/api/course-lessons/:id/download-audio/stream', asyncHandler(async (re
 }));
 
 app.post('/api/course-lessons/:id/transcribe/stream', asyncHandler(async (req, res) => {
-  const shouldCorrect = req.body.correct !== false;
+  const body = isRecord(req.body) ? req.body : {};
+  const shouldCorrect = body.correct !== false;
+  const language = normalizeASRLanguage(body.language) || cfg.asr.language || 'foreign';
   const initial = store.getCourseLesson(String(req.params.id));
   sse(res, async (send) => {
     let lesson = await ensureLessonVideo(initial, send);
-    let audioPath = String(req.body.audio_path || lesson.audio_path || '').trim();
+    let audioPath = String(body.audio_path || lesson.audio_path || '').trim();
     if (!audioPath || !(await fileExists(audioPath))) {
       send('status', { message: 'No cached audio found, downloading first...' });
       audioPath = await asr.downloadAudio(lesson.video!, (message) => send('progress', { message }));
@@ -239,7 +283,7 @@ app.post('/api/course-lessons/:id/transcribe/stream', asyncHandler(async (req, r
     }
     send('status', { message: 'Starting lesson transcription...' });
     await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
-    const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }));
+    const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }), { language });
     await store.saveTranscript(lesson.video!.id, transcript);
     send('progress', { message: 'ASR finished, transcript length: ' + transcript.content.length });
     if (!shouldCorrect) {
@@ -302,9 +346,11 @@ app.post('/api/course-lessons/:id/summarize/stream', asyncHandler(async (req, re
 
 app.post('/api/course-lessons/:id/run/stream', asyncHandler(async (req, res) => {
   const initial = store.getCourseLesson(String(req.params.id));
+  const body = isRecord(req.body) ? req.body : {};
+  const language = normalizeASRLanguage(body.language) || cfg.asr.language || 'foreign';
   sse(res, async (send) => {
     let lesson = await ensureLessonVideo(initial, send);
-    let text = String(req.body.transcript || '').trim();
+    let text = String(body.transcript || '').trim();
     if (text) {
       send('status', { message: 'Using edited transcript from the page...' });
       const manual = await store.saveTranscript(lesson.video!.id, { source: 'manual_edit', language: 'zh-CN', content: text });
@@ -322,13 +368,13 @@ app.post('/api/course-lessons/:id/run/stream', asyncHandler(async (req, res) => 
       }
       send('status', { message: 'Transcribing lesson audio...' });
       await store.updateCourseLesson(lesson.id, { status: 'transcribing', error: '' });
-      const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }));
+      const transcript = await asr.transcribeAudio(lesson.video!, audioPath, (message) => send('progress', { message }), { language });
       await store.saveTranscript(lesson.video!.id, transcript);
       lesson = await store.updateCourseLesson(lesson.id, { transcript, status: 'correcting', error: '' });
       text = transcript.content;
     }
 
-    if (req.body.correct !== false && (!lesson.corrected_transcript || lesson.corrected_transcript.content !== text)) {
+    if (body.correct !== false && (!lesson.corrected_transcript || lesson.corrected_transcript.content !== text)) {
       send('status', { message: 'Correcting transcript with AI...' });
       await store.updateCourseLesson(lesson.id, { status: 'correcting', error: '' });
       text = await ai.correctTranscript(lesson.video!, text);
@@ -338,7 +384,7 @@ app.post('/api/course-lessons/:id/run/stream', asyncHandler(async (req, res) => 
 
     if (!text.trim()) throw new Error('lesson has no transcript to summarize');
     send('status', { message: 'Generating summary, transcript length: ' + text.length });
-    const summary = await ai.summarize(lesson.video!, text, String(req.body.instruction || ''));
+    const summary = await ai.summarize(lesson.video!, text, String(body.instruction || ''));
     const saved = await store.saveSummary(lesson.video!.id, { model: summary.model, markdown: summary.markdown });
     lesson = await store.updateCourseLesson(lesson.id, { summary: saved, status: 'done', error: '' });
     send('done', { lesson, message: 'Single lesson run finished' });
@@ -383,6 +429,7 @@ app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
   const instruction = String(req.body.instruction || '');
   const transcribeMissing = Boolean(req.body.transcribe_missing);
   const skipCorrect = Boolean(req.body.skip_correct);
+  const language = normalizeASRLanguage(req.body.language) || cfg.asr.language || 'foreign';
 
   sse(res, async (send) => {
     const urls = await expandVideoUrls(url, limit);
@@ -398,7 +445,7 @@ app.post('/api/batch/album/stream', asyncHandler(async (req, res) => {
       while (queue.length) {
         const item = queue.shift();
         if (!item) return;
-        await runBatchOne(item.url, item.index, urls.length, { courseId: course.id, instruction, target, transcribeMissing, skipCorrect }, send).catch(async (err) => {
+        await runBatchOne(item.url, item.index, urls.length, { courseId: course.id, instruction, target, transcribeMissing, skipCorrect, language }, send).catch(async (err) => {
           const lesson = store.listCourseLessons(course.id).find((entry) => entry.index === item.index);
           if (lesson) await store.updateCourseLesson(lesson.id, { status: 'error', error: (err as Error).message });
           send('log', { message: `[error] #${item.index} ${(err as Error).message}` });
@@ -423,7 +470,7 @@ async function runBatchOne(
   url: string,
   index: number,
   total: number,
-  options: { courseId?: string; instruction: string; target: string; transcribeMissing: boolean; skipCorrect: boolean },
+  options: { courseId?: string; instruction: string; target: string; transcribeMissing: boolean; skipCorrect: boolean; language: AppConfig['asr']['language'] },
   send: SendSSE
 ): Promise<void> {
   send('log', { message: `\n[${index}/${total}] ${url}` });
@@ -438,7 +485,7 @@ async function runBatchOne(
   if (!text.trim() && options.transcribeMissing) {
     send('log', { message: '[transcribe] no public transcript, running ASR provider...' });
     if (lesson) await store.updateCourseLesson(lesson.id, { status: 'transcribing' });
-    const asrText = await asr.transcribe(video, (message) => send('log', { message }));
+    const asrText = await asr.transcribe(video, (message) => send('log', { message }), { language: options.language });
     text = asrText.content;
     await store.saveTranscript(video.id, asrText);
     if (lesson) await store.updateCourseLesson(lesson.id, { transcript: asrText, status: 'correcting' });
@@ -476,6 +523,32 @@ async function expandVideoUrls(url: string, limit: number): Promise<string[]> {
   const urls = ytdlpUrls.length > 1 ? ytdlpUrls : pageUrls.length > 1 ? pageUrls : uniqueVideoUrls([url].filter((item) => extractBvid(item)));
   if (!urls.length) throw new Error('没有解析到 B站视频链接');
   return limit > 0 ? urls.slice(0, limit) : urls;
+}
+
+async function refreshCourseLessons(courseId: string): Promise<number> {
+  const course = store.getCourse(courseId);
+  const before = store.listCourseLessons(course.id).length;
+  const pageInfos = extractBvid(course.source_url) ? await bilibili.listVideoPageInfos(course.source_url).catch(() => []) : [];
+  if (pageInfos.length > 1) {
+    for (const [index, video] of pageInfos.entries()) {
+      await store.upsertCourseLesson({
+        course_id: course.id,
+        index: index + 1,
+        url: video.url,
+        video
+      });
+    }
+  } else {
+    const urls = await expandVideoUrls(course.source_url, 0);
+    for (const [index, url] of urls.entries()) {
+      await store.upsertCourseLesson({
+        course_id: course.id,
+        index: index + 1,
+        url
+      });
+    }
+  }
+  return Math.max(0, store.listCourseLessons(course.id).length - before);
 }
 
 async function ytdlpFlat(url: string): Promise<string[]> {
@@ -533,13 +606,17 @@ function publicConfig() {
     },
     asr: {
       provider: cfg.asr.provider,
+      language: cfg.asr.language || 'foreign',
       model: cfg.asr.model || '',
       device: cfg.asr.device || 'auto',
       work_dir: cfg.asr.work_dir || '',
+      local_engine: cfg.asr.local_engine || 'faster_whisper',
+      local_profiles: cfg.asr.local_profiles || {},
       python_path: cfg.asr.python_path || '',
-      openai_base_url: cfg.asr.openai_base_url || '',
+      openai_base_url: cfg.asr.provider === 'openai' ? cfg.asr.openai_base_url || '' : '',
       openai_api_key_configured: Boolean(cfg.asr.openai_api_key),
       spark_app_id_configured: Boolean(cfg.asr.spark_app_id),
+      spark_api_key_configured: Boolean(cfg.asr.spark_api_key),
       spark_api_secret_configured: Boolean(cfg.asr.spark_api_secret)
     }
   };
@@ -581,14 +658,49 @@ function mergeRuntimeConfig(current: AppConfig, body: Record<string, unknown>): 
   if (asrProvider && ['none', 'openai', 'local', 'spark'].includes(asrProvider)) {
     next.asr.provider = asrProvider as AppConfig['asr']['provider'];
   }
+  const language = normalizeASRLanguage(asrPatch.language);
+  if (language) next.asr.language = language;
   assignString(next.asr, 'model', asrPatch.model);
+  const localEngine = stringValue(asrPatch.local_engine);
+  if (localEngine && ['faster_whisper', 'funasr', 'sensevoice'].includes(localEngine)) {
+    next.asr.local_engine = localEngine as AppConfig['asr']['local_engine'];
+  }
+  if (isRecord(asrPatch.local_profiles)) {
+    next.asr.local_profiles = mergeLocalASRProfiles(next.asr.local_profiles, asrPatch.local_profiles);
+  }
   assignString(next.asr, 'device', asrPatch.device);
   assignString(next.asr, 'work_dir', asrPatch.work_dir);
   assignString(next.asr, 'python_path', asrPatch.python_path);
   assignString(next.asr, 'openai_base_url', asrPatch.openai_base_url);
   assignSecret(next.asr, 'openai_api_key', asrPatch.openai_api_key);
   assignSecret(next.asr, 'spark_app_id', asrPatch.spark_app_id);
+  assignSecret(next.asr, 'spark_api_key', asrPatch.spark_api_key);
   assignSecret(next.asr, 'spark_api_secret', asrPatch.spark_api_secret);
+  return next;
+}
+
+function normalizeASRLanguage(value: unknown): AppConfig['asr']['language'] | undefined {
+  const text = stringValue(value);
+  if (text && ['zh', 'foreign', 'auto'].includes(text)) return text as AppConfig['asr']['language'];
+  return undefined;
+}
+
+function mergeLocalASRProfiles(
+  current: AppConfig['asr']['local_profiles'] | undefined,
+  patch: Record<string, unknown>
+): AppConfig['asr']['local_profiles'] {
+  const next = { ...(current || {}) };
+  for (const key of ['zh', 'foreign'] as const) {
+    const raw = isRecord(patch[key]) ? patch[key] : undefined;
+    if (!raw) continue;
+    const profile = { ...(next[key] || {}) };
+    const engine = stringValue(raw.engine);
+    if (engine && ['faster_whisper', 'funasr', 'sensevoice'].includes(engine)) {
+      profile.engine = engine as NonNullable<AppConfig['asr']['local_engine']>;
+    }
+    assignString(profile, 'model', raw.model);
+    next[key] = profile;
+  }
   return next;
 }
 

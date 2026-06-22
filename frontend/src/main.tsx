@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AudioOutlined,
@@ -86,6 +86,7 @@ type StreamPayload = {
   message?: string;
   error?: string;
   report?: string;
+  audio_path?: string;
   summary?: Summary;
   transcript?: Transcript;
   lesson?: CourseLesson;
@@ -528,6 +529,29 @@ function App() {
     setCourseStatus(`已加载：${res.course.title} / ${res.lessons.length} 课时`);
   }
 
+  async function refreshSelectedCourse() {
+    if (!selectedCourseID) {
+      await loadCourses();
+      return;
+    }
+    setLessonBusy(true);
+    setCourseStatus('正在重新解析课程章节...');
+    try {
+      const res = await api<{ course: Course; lessons: CourseLesson[]; added: number }>(`/api/courses/${selectedCourseID}/refresh`, {});
+      setSelectedCourseID(res.course.id);
+      setCourseLessons(res.lessons);
+      const active = res.lessons.find((lesson) => lesson.id === activeLessonID) || res.lessons[0] || null;
+      setActiveLessonID(active?.id || '');
+      loadLessonDraft(active);
+      setCourseStatus(`章节已刷新：共 ${res.lessons.length} 课时，新增 ${res.added} 个`);
+      await loadCourses();
+    } catch (err) {
+      setCourseStatus(`刷新章节失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
   async function recoverAsrCache() {
     setLessonBusy(true);
     setCourseStatus('正在扫描 notes/asr 本地音频缓存...');
@@ -538,6 +562,38 @@ function App() {
       setCourseStatus(`已恢复 ${res.recovered} 个本地 ASR 缓存课时`);
     } catch (err) {
       setCourseStatus(`恢复缓存失败：${(err as Error).message}`);
+    } finally {
+      setLessonBusy(false);
+    }
+  }
+
+  async function refreshCourseAll() {
+    setLessonBusy(true);
+    setCourseStatus('正在刷新课程章节并扫描本地缓存...');
+    try {
+      let nextCourseID = selectedCourseID;
+      let chapterAdded = 0;
+      if (selectedCourseID) {
+        const refreshed = await api<{ course: Course; lessons: CourseLesson[]; added: number }>(`/api/courses/${selectedCourseID}/refresh`, {});
+        nextCourseID = refreshed.course.id;
+        chapterAdded = refreshed.added;
+      }
+      const recovered = await api<{ recovered: number; courses: Course[] }>('/api/courses/recover-asr-cache', {});
+      setCourses(recovered.courses);
+      const targetID = nextCourseID || recovered.courses[0]?.id || '';
+      if (targetID) {
+        const loaded = await api<{ course: Course; lessons: CourseLesson[] }>(`/api/courses/${targetID}`);
+        setSelectedCourseID(loaded.course.id);
+        setCourseLessons(loaded.lessons);
+        const active = loaded.lessons.find((lesson) => lesson.id === activeLessonID) || loaded.lessons[0] || null;
+        setActiveLessonID(active?.id || '');
+        loadLessonDraft(active);
+        setCourseStatus(`课程已刷新：共 ${loaded.lessons.length} 课时，新增章节 ${chapterAdded} 个，恢复缓存 ${recovered.recovered} 个`);
+      } else {
+        setCourseStatus('课程已刷新：暂无课程记录');
+      }
+    } catch (err) {
+      setCourseStatus(`刷新课程失败：${(err as Error).message}`);
     } finally {
       setLessonBusy(false);
     }
@@ -901,6 +957,101 @@ function App() {
     }
   }
 
+  async function downloadSingleVideoAudio() {
+    if (!video) return;
+    setBusy(true);
+    setTranscriptStatus('正在下载音频...');
+    addLog('单视频音频下载已启动。');
+    try {
+      const res = await fetch('/api/videos/download-audio/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_id: video.id })
+      });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || res.statusText || '下载接口没有返回内容流');
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const handleMessage = (raw: string) => {
+        const parsed = parseSSEMessage(raw);
+        if (!parsed) return;
+        const { event, payload } = parsed;
+        if (event === 'status' || event === 'progress') {
+          const message = payload.message || '正在下载音频...';
+          setTranscriptStatus(message);
+          addLog(message);
+          return;
+        }
+        if (event === 'done') {
+          const message = payload.audio_path ? `音频已缓存：${payload.audio_path}` : '音频下载完成';
+          setTranscriptStatus(message);
+          addLog(message);
+          return;
+        }
+        if (event === 'error') throw new Error(payload.error || '音频下载失败');
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          if (part.trim()) handleMessage(part);
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleMessage(buffer);
+    } catch (err) {
+      const message = `音频下载失败：${(err as Error).message}`;
+      setTranscriptStatus(message);
+      addLog(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function transcribeAndCorrectSingleVideo() {
+    if (!video) return;
+    setBusy(true);
+    try {
+      const text = await transcribeFromBackend();
+      await correctTranscriptFromBackend(text);
+    } catch (err) {
+      const message = `转写并校正失败：${(err as Error).message}`;
+      setTranscriptStatus(message);
+      addLog(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSingleWorkspaceEdits() {
+    if (!video) return;
+    setBusy(true);
+    try {
+      const saved = await api<{ transcript?: Transcript; note?: Note }>('/api/videos/save-workspace', {
+        video_id: video.id,
+        title: video.title,
+        transcript,
+        markdown: summary
+      });
+      if (saved.transcript) {
+        setTranscriptSource(saved.transcript.source || 'manual_edit');
+        setTranscriptStatus('转写文本已保存');
+      }
+      if (saved.note) setNote(saved.note);
+      addLog('单视频修改已保存。');
+    } catch (err) {
+      addLog(`保存修改失败：${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function correctTranscriptFromBackend(sourceText?: string): Promise<string> {
     if (!video) throw new Error('请先解析一个 B 站视频');
     const inputText = sourceText ?? transcript;
@@ -1237,6 +1388,7 @@ function App() {
       addLog(`批量总结失败：${message}`);
     } finally {
       setBatchRunning(false);
+      await loadCourses();
     }
   }
 
@@ -1278,6 +1430,32 @@ function App() {
       addLog(`截图保存失败：${(err as Error).message}`);
     }
   }
+
+  const singleVideoActionButtons = (
+    <Flex gap={8} wrap="wrap" className="toolbar">
+      <Button icon={<DownloadOutlined />} onClick={downloadSingleVideoAudio} disabled={busy || !video}>下载音频</Button>
+      <Button icon={<AudioOutlined />} onClick={startTranscribe} disabled={busy || !video}>只转写</Button>
+      <Button icon={<RobotOutlined />} onClick={startCorrectTranscript} disabled={busy || !video || !transcript.trim()}>只校正</Button>
+      <Button icon={<AudioOutlined />} onClick={transcribeAndCorrectSingleVideo} disabled={busy || !video}>转写并校正</Button>
+      <Button type="primary" icon={<ThunderboltOutlined />} onClick={summarize} loading={streaming} disabled={busy || !video || streaming}>一键跑本视频</Button>
+      <Button icon={<FileTextOutlined />} onClick={summarize} loading={streaming} disabled={busy || !video || streaming || !transcript.trim()}>继续总结</Button>
+      <Button icon={<SaveOutlined />} onClick={saveSingleWorkspaceEdits} disabled={busy || !video || (!transcript.trim() && !summary.trim())}>保存修改</Button>
+      <Button icon={<CloudUploadOutlined />} onClick={syncFeishu} disabled={busy || !note}>存飞书</Button>
+    </Flex>
+  );
+
+  const lessonActionButtons = (
+    <Space wrap>
+      <Button icon={<DownloadOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={downloadActiveLessonAudio}>下载音频</Button>
+      <Button icon={<AudioOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={() => transcribeActiveLesson(false)}>只转写</Button>
+      <Button icon={<RobotOutlined />} loading={lessonBusy} disabled={!activeLesson || !lessonTranscriptDraft.trim()} onClick={correctActiveLesson}>只校正</Button>
+      <Button icon={<AudioOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={() => transcribeActiveLesson(true)}>转写并校正</Button>
+      <Button type="primary" icon={<ThunderboltOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={runActiveLesson}>一键跑本课</Button>
+      <Button icon={<FileTextOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={summarizeActiveLesson}>继续总结</Button>
+      <Button icon={<SaveOutlined />} loading={lessonBusy} disabled={!activeLesson} onClick={saveLessonDraft}>保存修改</Button>
+      <Button icon={<CloudUploadOutlined />} loading={lessonBusy} disabled={!activeLesson || !lessonSummaryDraft.trim()} onClick={syncActiveLessonFeishu}>存飞书</Button>
+    </Space>
+  );
 
   const singleVideoPane = (
     <Row gutter={[16, 16]} align="stretch">
@@ -1323,20 +1501,10 @@ function App() {
             title="字幕 / 转写"
             extra={<Tag color={transcriptSource === 'none' ? 'default' : 'green'}>{transcriptSource}</Tag>}
           >
-            <Flex gap={8} wrap="wrap" className="toolbar">
-              <Button icon={<ReloadOutlined />} onClick={refreshTranscript} disabled={busy || !video}>
-                获取字幕
-              </Button>
-              <Button icon={<AudioOutlined />} onClick={startTranscribe} disabled={busy || !video}>
-                自动转写
-              </Button>
-              <Button icon={<RobotOutlined />} onClick={startCorrectTranscript} disabled={busy || !video || !transcript.trim()}>
-                AI 校正
-              </Button>
-              <Button type="primary" icon={<ThunderboltOutlined />} onClick={summarize} loading={streaming} disabled={busy || !video || streaming}>
-                AI 总结
-              </Button>
-            </Flex>
+            {singleVideoActionButtons}
+            <Button className="subtitleButton" icon={<ReloadOutlined />} onClick={refreshTranscript} disabled={busy || !video}>
+              获取B站字幕
+            </Button>
             <Alert className="compactAlert" type="info" showIcon message={transcriptStatus} />
             <TextArea className="workText" value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="字幕 / 转写文本" />
             <Flex justify="space-between" align="center" className="subbar">
@@ -1431,6 +1599,25 @@ function App() {
               一键批量总结
             </Button>
           </Form>
+        </Card>
+        <Card className="topGap" title="合集课时操作" extra={<Tag color={activeLesson ? 'blue' : 'default'}>{courseLessons.length}</Tag>}>
+          <Space direction="vertical" className="full" size={10}>
+            <Select
+              className="full"
+              placeholder="选择要处理的课时"
+              value={activeLessonID || undefined}
+              onChange={(lessonID) => {
+                setActiveLessonID(lessonID);
+                loadLessonDraft(courseLessons.find((item) => item.id === lessonID) || null);
+              }}
+              options={courseLessons.map((lesson) => ({
+                value: lesson.id,
+                label: `${String(lesson.index).padStart(2, '0')} ${lesson.video?.title || lesson.url}`
+              }))}
+            />
+            {lessonActionButtons}
+            <Alert className="compactAlert" type={courseStatus.startsWith('Failed') || courseStatus.includes('失败') ? 'error' : 'info'} showIcon message={courseStatus} />
+          </Space>
         </Card>
       </Col>
 
@@ -1618,7 +1805,7 @@ function App() {
         <Space direction="vertical" size={16} className="full">
           <Card
             title="课程历史"
-            extra={<Button size="small" icon={<ReloadOutlined />} onClick={loadCourses}>刷新</Button>}
+            extra={<Button size="small" icon={<ReloadOutlined />} loading={lessonBusy} onClick={refreshCourseAll}>刷新课程</Button>}
           >
             <Select
               className="full"
@@ -1630,10 +1817,6 @@ function App() {
                 label: course.title
               }))}
             />
-            <Space className="topGap" wrap>
-              <Button size="small" icon={<ReloadOutlined />} onClick={loadCourses}>刷新</Button>
-              <Button size="small" icon={<FolderOpenOutlined />} loading={lessonBusy} onClick={recoverAsrCache}>恢复缓存</Button>
-            </Space>
             <Input
               className="topGap"
               value={feishuTarget}

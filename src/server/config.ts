@@ -32,12 +32,19 @@ const defaultConfig: AppConfig = {
   },
   asr: {
     provider: 'spark',
-    openai_base_url: 'https://api.openai.com/v1',
+    language: 'foreign',
+    openai_base_url: '',
     openai_api_key_env: 'OPENAI_API_KEY',
     spark_app_id_env: 'SPARK_APP_ID',
+    spark_api_key_env: 'SPARK_API_KEY',
     spark_api_secret_env: 'SPARK_API_SECRET',
-    model: 'lfasr',
+    model: 'spark_iat',
     work_dir: 'notes/asr',
+    local_engine: 'faster_whisper',
+    local_profiles: {
+      zh: { engine: 'sensevoice', model: 'iic/SenseVoiceSmall' },
+      foreign: { engine: 'sensevoice', model: 'iic/SenseVoiceSmall' }
+    },
     python_path: 'D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe',
     python_path_env: 'LOCAL_ASR_PYTHON',
     device: 'auto'
@@ -80,7 +87,9 @@ export function loadConfig(file = 'config.json'): AppConfig {
   hydrateAIProfile(cfg.ai.correction, cfg.ai);
   hydrateAIProfile(cfg.ai.title, cfg.ai);
   if (env('ASR_PROVIDER')) cfg.asr.provider = env('ASR_PROVIDER') as AppConfig['asr']['provider'];
+  if (env('ASR_LANGUAGE')) cfg.asr.language = env('ASR_LANGUAGE') as AppConfig['asr']['language'];
   if (env('ASR_MODEL')) cfg.asr.model = env('ASR_MODEL');
+  if (env('LOCAL_ASR_ENGINE')) cfg.asr.local_engine = env('LOCAL_ASR_ENGINE') as AppConfig['asr']['local_engine'];
   if (env('LOCAL_ASR_MODEL')) cfg.asr.model = env('LOCAL_ASR_MODEL');
   if (env('LOCAL_ASR_DEVICE')) cfg.asr.device = env('LOCAL_ASR_DEVICE');
   cfg.asr.python_path ||= cfg.asr.python_path_env ? env(cfg.asr.python_path_env) : '';
@@ -88,8 +97,10 @@ export function loadConfig(file = 'config.json'): AppConfig {
   if (env('OPENAI_BASE_URL')) cfg.asr.openai_base_url = env('OPENAI_BASE_URL');
   cfg.asr.openai_api_key ||= cfg.asr.openai_api_key_env ? env(cfg.asr.openai_api_key_env) : '';
   cfg.asr.spark_app_id ||= cfg.asr.spark_app_id_env ? env(cfg.asr.spark_app_id_env) : '';
+  cfg.asr.spark_api_key ||= cfg.asr.spark_api_key_env ? env(cfg.asr.spark_api_key_env) : '';
   cfg.asr.spark_api_secret ||= cfg.asr.spark_api_secret_env ? env(cfg.asr.spark_api_secret_env) : '';
   cfg.asr.spark_app_id ||= cfg.ai.spark_app_id;
+  cfg.asr.spark_api_key ||= cfg.ai.spark_api_key;
   cfg.asr.spark_api_secret ||= cfg.ai.spark_api_secret;
 
   if (cfg.feishu.enabled_env && env(cfg.feishu.enabled_env)) {

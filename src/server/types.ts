@@ -82,6 +82,13 @@ export type AIServiceConfig = {
   dify_user?: string;
 };
 
+export type ASRLanguage = 'zh' | 'foreign' | 'auto';
+
+export type LocalASRProfile = {
+  engine?: 'faster_whisper' | 'funasr' | 'sensevoice';
+  model?: string;
+};
+
 export type AppConfig = {
   server: {
     host: string;
@@ -113,15 +120,23 @@ export type AppConfig = {
   };
   asr: {
     provider: 'none' | 'openai' | 'local' | 'spark';
+    language?: ASRLanguage;
     openai_base_url: string;
     openai_api_key?: string;
     openai_api_key_env?: string;
     spark_app_id?: string;
     spark_app_id_env?: string;
+    spark_api_key?: string;
+    spark_api_key_env?: string;
     spark_api_secret?: string;
     spark_api_secret_env?: string;
     model: string;
     work_dir: string;
+    local_engine?: 'faster_whisper' | 'funasr' | 'sensevoice';
+    local_profiles?: {
+      zh?: LocalASRProfile;
+      foreign?: LocalASRProfile;
+    };
     python_path?: string;
     python_path_env?: string;
     device?: string;

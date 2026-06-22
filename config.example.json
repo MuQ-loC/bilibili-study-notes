@@ -33,12 +33,25 @@
   },
   "asr": {
     "provider": "spark",
-    "openai_base_url": "https://api.openai.com/v1",
+    "language": "foreign",
+    "openai_base_url": "",
     "openai_api_key_env": "OPENAI_API_KEY",
     "spark_app_id_env": "SPARK_APP_ID",
+    "spark_api_key_env": "SPARK_API_KEY",
     "spark_api_secret_env": "SPARK_API_SECRET",
-    "model": "lfasr",
+    "model": "spark_iat",
     "work_dir": "notes/asr",
+    "local_engine": "faster_whisper",
+    "local_profiles": {
+      "zh": {
+        "engine": "sensevoice",
+        "model": "iic/SenseVoiceSmall"
+      },
+      "foreign": {
+        "engine": "faster_whisper",
+        "model": "large-v3"
+      }
+    },
     "python_path": "D:\\Ev\\BiliSummaryASR\\Scripts\\python.exe",
     "python_path_env": "LOCAL_ASR_PYTHON",
     "device": "auto"
