@@ -25,13 +25,11 @@ import {
   Empty,
   Flex,
   Form,
-  Image,
   Input,
   InputNumber,
   Layout,
   Row,
   Select,
-  Slider,
   Space,
   Statistic,
   Tabs,
@@ -90,33 +88,6 @@ type StreamPayload = {
   summary?: Summary;
   transcript?: Transcript;
   lesson?: CourseLesson;
-};
-
-type TTSVoice = {
-  id: string;
-  name: string;
-  provider: string;
-  voice_type: string;
-  gender: 'male' | 'female' | 'neutral';
-  style: string[];
-  description: string;
-};
-
-type TTSStatus = {
-  provider: string;
-  configured: boolean;
-  cluster: string;
-  endpoint: string;
-  default_voice_type: string;
-  gpt_sovits_base_url?: string;
-};
-
-type TTSPreview = {
-  id: string;
-  provider: string;
-  voice_type: string;
-  text: string;
-  audio_url: string;
 };
 
 type AIProfileConfig = {
@@ -303,21 +274,6 @@ function App() {
   const [status, setStatus] = useState('就绪');
   const [busy, setBusy] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [ttsStatus, setTtsStatus] = useState<TTSStatus | null>(null);
-  const [ttsVoices, setTtsVoices] = useState<TTSVoice[]>([]);
-  const [voiceGender, setVoiceGender] = useState<'all' | 'male' | 'female'>('male');
-  const [voiceStyle, setVoiceStyle] = useState('搞怪');
-  const [selectedVoiceType, setSelectedVoiceType] = useState('');
-  const [previewText, setPreviewText] = useState('我做了一个开源小工具，专门把 B站长教程变成能复习、能检索、能照着做的学习笔记。');
-  const [ttsSpeed, setTtsSpeed] = useState(1.12);
-  const [ttsPitch, setTtsPitch] = useState(1);
-  const [ttsEmotion, setTtsEmotion] = useState('happy');
-  const [localRefAudioPath, setLocalRefAudioPath] = useState('');
-  const [localPromptText, setLocalPromptText] = useState('');
-  const [localPromptLang, setLocalPromptLang] = useState('zh');
-  const [ttsPreview, setTtsPreview] = useState<TTSPreview | null>(null);
-  const [ttsLoading, setTtsLoading] = useState(false);
-  const [ttsMessage, setTtsMessage] = useState('正在加载音色列表...');
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourseID, setSelectedCourseID] = useState('');
   const [courseLessons, setCourseLessons] = useState<CourseLesson[]>([]);
@@ -336,40 +292,10 @@ function App() {
   const currentPlayer = useMemo(() => playerUrl(video), [video]);
   const summaryWordCount = useMemo(() => summary.trim().length, [summary]);
   const transcriptWordCount = useMemo(() => transcript.trim().length, [transcript]);
-  const voiceStyles = useMemo(
-    () => Array.from(new Set(ttsVoices.flatMap((voice) => voice.style))).sort((a, b) => a.localeCompare(b, 'zh-CN')),
-    [ttsVoices]
-  );
-  const filteredVoices = useMemo(
-    () =>
-      ttsVoices.filter((voice) => {
-        const genderMatched = voiceGender === 'all' || voice.gender === voiceGender;
-        const styleMatched = !voiceStyle || voice.style.includes(voiceStyle);
-        return genderMatched && styleMatched;
-      }),
-    [ttsVoices, voiceGender, voiceStyle]
-  );
   const activeLesson = useMemo(
     () => courseLessons.find((item) => item.id === activeLessonID) || null,
     [courseLessons, activeLessonID]
   );
-
-  useEffect(() => {
-    api<{ status: TTSStatus; voices: TTSVoice[] }>('/api/tts/voices')
-      .then((res) => {
-        setTtsStatus(res.status);
-        setTtsVoices(res.voices);
-        const preferred =
-          res.voices.find((voice) => voice.style.includes('搞怪') && voice.gender === 'male') ||
-          res.voices.find((voice) => voice.gender === 'male') ||
-          res.voices[0];
-        setSelectedVoiceType(res.status.default_voice_type || preferred?.voice_type || '');
-        setTtsMessage(res.status.configured ? '音色列表已加载，可以直接试听。' : '音色列表已加载；试听前需要配置火山 TTS AppID 和 Token。');
-      })
-      .catch((err) => {
-        setTtsMessage(`音色列表加载失败：${(err as Error).message}`);
-      });
-  }, []);
 
   useEffect(() => {
     loadCourses();
@@ -782,44 +708,6 @@ function App() {
     } finally {
       setLessonBusy(false);
     }
-  }
-
-  async function previewVoice(voiceType = selectedVoiceType) {
-    if (!voiceType) {
-      setTtsMessage('请先选择一个音色');
-      return;
-    }
-    setTtsLoading(true);
-    setTtsPreview(null);
-    setTtsMessage('正在生成试听音频...');
-    try {
-      const preview = await api<TTSPreview>('/api/tts/preview', {
-        provider: voiceType === 'local_reference' ? 'gpt_sovits' : 'volcengine',
-        voice_type: voiceType,
-        text: previewText,
-        speed: ttsSpeed,
-        pitch: ttsPitch,
-        emotion: ttsEmotion,
-        ref_audio_path: localRefAudioPath,
-        prompt_text: localPromptText,
-        prompt_lang: localPromptLang
-      });
-      setSelectedVoiceType(voiceType);
-      setTtsPreview(preview);
-      setTtsMessage(`试听生成完成：${voiceType}`);
-      addLog(`配音试听生成：${voiceType}`);
-    } catch (err) {
-      const message = (err as Error).message;
-      setTtsMessage(`试听失败：${message}`);
-      addLog(`配音试听失败：${message}`);
-    } finally {
-      setTtsLoading(false);
-    }
-  }
-
-  function useVoiceForVideo(voiceType: string) {
-    setSelectedVoiceType(voiceType);
-    setTtsMessage(`已选中音色：${voiceType}。生成视频配音时会使用这个 voice_type。`);
   }
 
   async function analyze() {
@@ -1651,154 +1539,6 @@ function App() {
     </Row>
   );
 
-  const voicePane = (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} xl={8}>
-        <Space direction="vertical" size={16} className="full">
-          <Card title="火山 TTS 配置" extra={<Tag color={ttsStatus?.configured ? 'green' : 'red'}>{ttsStatus?.configured ? '已配置' : '未配置'}</Tag>}>
-            <Descriptions size="small" column={1} bordered>
-              <Descriptions.Item label="Provider">{ttsStatus?.provider || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Cluster">{ttsStatus?.cluster || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Endpoint">{ttsStatus?.endpoint || '-'}</Descriptions.Item>
-              <Descriptions.Item label="GPT-SoVITS">{ttsStatus?.gpt_sovits_base_url || '-'}</Descriptions.Item>
-              <Descriptions.Item label="默认音色">{ttsStatus?.default_voice_type || '未设置'}</Descriptions.Item>
-            </Descriptions>
-            <Alert
-              className="compactAlert topGap"
-              type={ttsStatus?.configured ? 'success' : 'warning'}
-              showIcon
-              message={ttsMessage}
-            />
-          </Card>
-
-          <Card title="试听参数">
-            <Form layout="vertical">
-              <Form.Item label="筛选性别">
-                <Select
-                  value={voiceGender}
-                  onChange={setVoiceGender}
-                  options={[
-                    { value: 'male', label: '男声' },
-                    { value: 'female', label: '女声' },
-                    { value: 'all', label: '全部' }
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item label="筛选风格">
-                <Select
-                  value={voiceStyle}
-                  onChange={setVoiceStyle}
-                  allowClear
-                  placeholder="全部风格"
-                  options={voiceStyles.map((style) => ({ value: style, label: style }))}
-                />
-              </Form.Item>
-              <Form.Item label="当前 voice_type">
-                <Input value={selectedVoiceType} onChange={(e) => setSelectedVoiceType(e.target.value)} />
-              </Form.Item>
-              <Form.Item label="本地参考音频路径">
-                <Input
-                  value={localRefAudioPath}
-                  onChange={(e) => setLocalRefAudioPath(e.target.value)}
-                  placeholder="D:\\path\\reference.wav 或 GPT-SoVITS 可访问的相对路径"
-                />
-              </Form.Item>
-              <Form.Item label="参考音频对应文本">
-                <TextArea
-                  className="previewText"
-                  value={localPromptText}
-                  onChange={(e) => setLocalPromptText(e.target.value)}
-                  placeholder="参考音频里实际说的文字，必须尽量准确"
-                />
-              </Form.Item>
-              <Form.Item label="参考语言">
-                <Select
-                  value={localPromptLang}
-                  onChange={setLocalPromptLang}
-                  options={[
-                    { value: 'zh', label: '中文 zh' },
-                    { value: 'en', label: '英文 en' },
-                    { value: 'ja', label: '日文 ja' },
-                    { value: 'all_zh', label: '多语种中文 all_zh' }
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item label={`语速 ${ttsSpeed.toFixed(2)}`}>
-                <Slider min={0.6} max={1.8} step={0.01} value={ttsSpeed} onChange={setTtsSpeed} />
-              </Form.Item>
-              <Form.Item label={`音高 ${ttsPitch.toFixed(2)}`}>
-                <Slider min={0.6} max={1.6} step={0.01} value={ttsPitch} onChange={setTtsPitch} />
-              </Form.Item>
-              <Form.Item label="情绪">
-                <Select
-                  value={ttsEmotion}
-                  onChange={setTtsEmotion}
-                  options={[
-                    { value: 'happy', label: 'happy / 活泼' },
-                    { value: 'angry', label: 'angry / 更冲' },
-                    { value: 'surprised', label: 'surprised / 夸张' },
-                    { value: 'neutral', label: 'neutral / 自然' }
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item label="试听文本">
-                <TextArea className="previewText" value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
-              </Form.Item>
-              <Button className="full" type="primary" icon={<AudioOutlined />} loading={ttsLoading} onClick={() => previewVoice()}>
-                试听当前音色
-              </Button>
-            </Form>
-          </Card>
-        </Space>
-      </Col>
-
-      <Col xs={24} xl={16}>
-        <Space direction="vertical" size={16} className="full">
-          <Card title="音色列表" extra={<Tag color="blue">{filteredVoices.length} / {ttsVoices.length}</Tag>}>
-            {filteredVoices.length === 0 ? (
-              <Empty description="没有匹配的音色" />
-            ) : (
-              <div className="voiceGrid">
-                {filteredVoices.map((voice) => (
-                  <Card
-                    key={voice.id}
-                    size="small"
-                    className={voice.voice_type === selectedVoiceType ? 'voiceCard activeVoice' : 'voiceCard'}
-                    title={voice.name}
-                    extra={<Tag color={voice.gender === 'male' ? 'blue' : voice.gender === 'female' ? 'magenta' : 'default'}>{voice.gender}</Tag>}
-                  >
-                    <div className="voiceType">{voice.voice_type}</div>
-                    <Text type="secondary">{voice.description}</Text>
-                    <div className="voiceTags">
-                      {voice.style.map((style) => <Tag key={style}>{style}</Tag>)}
-                    </div>
-                    <Flex gap={8} wrap="wrap">
-                      <Button size="small" onClick={() => useVoiceForVideo(voice.voice_type)}>选中</Button>
-                      <Button size="small" type="primary" ghost icon={<AudioOutlined />} loading={ttsLoading && selectedVoiceType === voice.voice_type} onClick={() => previewVoice(voice.voice_type)}>
-                        试听
-                      </Button>
-                    </Flex>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </Card>
-
-          <Card title="试听结果">
-            {ttsPreview ? (
-              <Space direction="vertical" size={10} className="full">
-                <Alert type="success" showIcon message={ttsPreview.voice_type} description={ttsPreview.text} />
-                <audio className="audioPlayer" src={ttsPreview.audio_url} controls autoPlay />
-              </Space>
-            ) : (
-              <Empty description="点击任意音色试听后，这里会出现播放器" />
-            )}
-          </Card>
-        </Space>
-      </Col>
-    </Row>
-  );
-
   const coursePane = (
     <Row gutter={[16, 16]}>
       <Col xs={24} xl={8}>
@@ -2116,7 +1856,7 @@ function App() {
             <Tag color="blue">本地优先 / BYOK / 可同步飞书</Tag>
             <Title level={2} className="heroTitle">B站教程学习笔记工作台</Title>
             <Text className="heroDesc">
-              从 B站链接到字幕校正、学习笔记、合集并发和配音试听，所有高频操作集中在一个页面里。
+              从 B站链接到字幕校正、学习笔记和合集并发，所有高频学习整理操作集中在一个页面里。
             </Text>
           </div>
           <Space size={10} wrap>
@@ -2125,9 +1865,6 @@ function App() {
             </Button>
             <Button icon={<FolderOpenOutlined />} onClick={startBatchSummary} disabled={batchRunning || !(batchUrl || url).trim()}>
               跑合集
-            </Button>
-            <Button icon={<AudioOutlined />} onClick={() => previewVoice()} loading={ttsLoading}>
-              试听配音
             </Button>
           </Space>
         </Flex>
@@ -2151,7 +1888,7 @@ function App() {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small" className="metricCard">
-            <Statistic title="音色数量" value={ttsVoices.length} />
+            <Statistic title="课程课时" value={courseLessons.length} />
           </Card>
         </Col>
       </Row>
@@ -2192,7 +1929,6 @@ function App() {
               { key: 'single', label: <span><VideoCameraOutlined /> 单视频工作台</span>, children: singleVideoPane },
               { key: 'batch', label: <span><FolderOpenOutlined /> 合集/专辑批量</span>, children: batchPane },
               { key: 'courses', label: <span><FileTextOutlined /> 课程管理</span>, children: coursePane },
-              { key: 'voice', label: <span><AudioOutlined /> {'\u914d\u97f3\u97f3\u8272'}</span>, children: voicePane },
               { key: 'settings', label: <span><RobotOutlined /> {'\u8bbe\u7f6e'}</span>, children: settingsPane }
             ]}
           />

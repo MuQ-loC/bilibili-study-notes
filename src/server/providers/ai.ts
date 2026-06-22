@@ -8,18 +8,39 @@ type SparkResponse = {
 };
 
 type RequiredAIServiceConfig = Required<Pick<AIServiceConfig, 'provider' | 'base_url' | 'api_key' | 'model' | 'spark_app_id' | 'spark_api_key' | 'spark_api_secret' | 'dify_app_type' | 'dify_user'>> & AIServiceConfig;
+const AI_SEGMENT_SECONDS = 20 * 60;
+const AI_RETRY_STATUSES = new Set([429, 502, 503, 504]);
 
 export class AIProvider {
   constructor(private cfg: AppConfig['ai']) {}
 
   async summarize(video: Video, transcript: string, instruction: string): Promise<Summary> {
     const profile = this.profile('summary');
-    const content = await this.complete(buildSummaryMessages(video, transcript, instruction), profile);
+    const segments = splitTranscript(transcript, AI_SEGMENT_SECONDS);
+    let content = '';
+    if (segments.length <= 1) {
+      content = await this.complete(buildSummaryMessages(video, transcript, instruction), profile);
+    } else {
+      const segmentNotes: string[] = [];
+      for (const [index, segment] of segments.entries()) {
+        const label = segment.label || `第 ${index + 1} 段`;
+        const note = await this.complete(buildSegmentSummaryMessages(video, segment.content, instruction, label, index + 1, segments.length), profile);
+        segmentNotes.push(`## ${label}\n\n${note.trim()}`);
+      }
+      content = await this.complete(buildMergedSummaryMessages(video, segmentNotes.join('\n\n'), instruction), profile);
+    }
     return { id: '', video_id: video.id, model: this.modelName(profile), markdown: applyGlossary(content) };
   }
 
   async correctTranscript(video: Video, transcript: string): Promise<string> {
-    return this.complete(buildCorrectionMessages(video, transcript), this.profile('correction'));
+    const profile = this.profile('correction');
+    const segments = splitTranscript(transcript, AI_SEGMENT_SECONDS);
+    if (segments.length <= 1) return this.complete(buildCorrectionMessages(video, transcript), profile);
+    const corrected: string[] = [];
+    for (const segment of segments) {
+      corrected.push(await this.complete(buildCorrectionMessages(video, segment.content), profile));
+    }
+    return corrected.join('\n').trim();
   }
 
   async shortTitle(video: Video, text: string, index = 0): Promise<{ short_title: string; title: string }> {
@@ -45,7 +66,7 @@ export class AIProvider {
     const model = profile.model || (provider === 'ollama' ? 'qwen2.5:7b-instruct' : 'deepseek-chat');
     if (provider !== 'ollama' && !profile.api_key) throw new Error('??? AI API Key');
 
-    const res = await fetch(baseUrl.replace(/\/$/, '') + '/chat/completions', {
+    const res = await fetchWithRetry(baseUrl.replace(/\/$/, '') + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -248,6 +269,95 @@ function buildSummaryMessages(video: Video, transcript: string, instruction: str
   ];
 }
 
+function buildSegmentSummaryMessages(video: Video, transcript: string, instruction: string, label: string, index: number, total: number): ChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content: [
+        'You are a technical course note assistant.',
+        'Write in Chinese. Keep important English terms, API names, commands and paper names in English.',
+        'This is one segment of a longer course. Summarize only this segment, but keep enough detail for final merging.',
+        'Use clean Markdown. Avoid long verbatim transcript copying.'
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: [
+        `# 视频信息`,
+        `标题：${video.title}`,
+        `UP主：${video.owner}`,
+        `BVID：${video.bvid}`,
+        '',
+        `# 分段信息`,
+        `当前段落：${label}`,
+        `段落序号：${index}/${total}`,
+        '',
+        `# 额外要求`,
+        instruction || '按学习教程笔记格式整理，重点提取操作步骤、关键概念、命令、易错点和复习清单。',
+        '',
+        `# 输出要求`,
+        '- 用中文输出。',
+        '- 保留时间戳。',
+        '- 只总结当前 20 分钟左右的段落。',
+        '- 内容要足够具体，方便最终合并成完整课程笔记。',
+        '',
+        `# 当前段落字幕/转写`,
+        transcript
+      ].join('\n')
+    }
+  ];
+}
+
+function buildMergedSummaryMessages(video: Video, segmentNotes: string, instruction: string): ChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content: [
+        'You are a senior technical editor.',
+        'Merge segmented course notes into one polished Chinese Markdown study note.',
+        'Keep useful timestamps. Remove duplicated points. Preserve important English terms.',
+        'Do not mention that the input was segmented unless it is useful to the learner.'
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: [
+        `# 视频信息`,
+        `标题：${video.title}`,
+        `UP主：${video.owner}`,
+        `BVID：${video.bvid}`,
+        '',
+        `# 额外要求`,
+        instruction || '按学习教程笔记格式整理，重点提取操作步骤、关键概念、命令、易错点和复习清单。',
+        '',
+        `# 最终输出格式`,
+        '请用 Markdown 输出，必须包含：',
+        '',
+        '1. 课程目标',
+        '2. 前置知识',
+        '3. 时间轴目录',
+        '4. 分段学习笔记',
+        '5. 操作步骤',
+        '6. 命令/代码/配置项',
+        '7. 关键概念解释',
+        '8. 易错点和坑',
+        '9. 复习清单',
+        '10. 可执行 TODO',
+        '',
+        '要求：',
+        '- 最终笔记必须是中文。',
+        '- 不要把每个 20 分钟分段机械堆叠，要合并成一份连贯课程笔记。',
+        '- 合并重复内容，保留关键细节。',
+        '- 有序列表必须显式递增，不要连续写多个 1.',
+        '- 表格只在确实适合对齐信息时使用。',
+        '',
+        `# 分段笔记`,
+        segmentNotes
+      ].join('\n')
+    }
+  ];
+}
+
 function buildCorrectionMessages(video: Video, transcript: string): ChatMessage[] {
   return [
     { role: 'system', content: '你是技术教程字幕校对助手，只修正 ASR 错词和技术术语，不总结、不删减。英文课程可以保留英文原句，但明显识别错误要修正。' },
@@ -350,6 +460,91 @@ function buildTitlePrompt(video: Video, text: string): string {
 
 笔记内容：
 ${clipped}`;
+}
+
+type TranscriptSegment = {
+  label: string;
+  content: string;
+};
+
+function splitTranscript(transcript: string, segmentSeconds: number): TranscriptSegment[] {
+  const text = transcript.trim();
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  const segments: TranscriptSegment[] = [];
+  let current: string[] = [];
+  let currentIndex = 0;
+  let currentStart = 0;
+  let sawTimestamp = false;
+
+  const flush = () => {
+    const content = current.join('\n').trim();
+    if (!content) return;
+    const start = currentStart;
+    const end = Math.max(start, (currentIndex + 1) * segmentSeconds);
+    segments.push({ label: `${formatClock(start)}-${formatClock(end)}`, content });
+    current = [];
+  };
+
+  for (const line of lines) {
+    const start = readLineStartSeconds(line);
+    if (start !== undefined) {
+      sawTimestamp = true;
+      const nextIndex = Math.floor(start / segmentSeconds);
+      if (current.length && nextIndex !== currentIndex) flush();
+      if (!current.length) {
+        currentIndex = nextIndex;
+        currentStart = nextIndex * segmentSeconds;
+      }
+    }
+    current.push(line);
+  }
+  flush();
+
+  if (sawTimestamp) return segments.length ? segments : [{ label: '', content: text }];
+  return splitByCharacters(text, 22000);
+}
+
+function splitByCharacters(text: string, size: number): TranscriptSegment[] {
+  const chars = Array.from(text);
+  if (chars.length <= size) return [{ label: '', content: text }];
+  const segments: TranscriptSegment[] = [];
+  for (let offset = 0; offset < chars.length; offset += size) {
+    segments.push({
+      label: `文本段 ${segments.length + 1}`,
+      content: chars.slice(offset, offset + size).join('')
+    });
+  }
+  return segments;
+}
+
+function readLineStartSeconds(line: string): number | undefined {
+  const match = line.match(/^\s*\[(\d+(?:\.\d+)?)(?:\s*[-,~]\s*\d+(?:\.\d+)?)?\]/);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 2): Promise<Response> {
+  let last: Response | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const res = await fetch(url, init);
+    if (!AI_RETRY_STATUSES.has(res.status) || attempt === attempts - 1) return res;
+    last = res;
+    await sleep(1000 * (attempt + 1));
+  }
+  return last as Response;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function applyGlossary(value: string): string {

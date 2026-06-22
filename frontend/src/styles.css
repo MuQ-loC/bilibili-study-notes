@@ -230,47 +230,6 @@ body {
   font-family: Consolas, "Microsoft YaHei", monospace;
 }
 
-.previewText {
-  min-height: 98px !important;
-  line-height: 1.55;
-}
-
-.voiceGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
-  gap: 12px;
-}
-
-.voiceCard {
-  min-height: 210px;
-}
-
-.activeVoice {
-  border-color: #2563eb !important;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
-}
-
-.voiceType {
-  margin-bottom: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: #f1f5f9;
-  color: #334155;
-  font-size: 12px;
-  line-height: 1.35;
-  word-break: break-all;
-  font-family: Consolas, "Microsoft YaHei", monospace;
-}
-
-.voiceTags {
-  min-height: 34px;
-  margin: 12px 0 10px;
-}
-
-.audioPlayer {
-  width: 100%;
-}
-
 .lessonList {
   display: grid;
   gap: 8px;
